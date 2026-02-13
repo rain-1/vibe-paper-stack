@@ -187,7 +187,7 @@ function setMetaContent(metaEl, paper) {
   badge.append(icon, label);
 
   const project = paper.project_name || 'No project';
-  const author = paper.authors.slice(0, 2).join(', ') + (paper.authors.length > 2 ? '…' : '');
+  const author = paper.authors.join(', ');
   const metaText = document.createElement('span');
   metaText.textContent = `${project} • ${paper.status} • ${author}`;
 
@@ -394,7 +394,7 @@ function render() {
     const abstractToggle = node.querySelector('.abstract-toggle');
     abstractEl.textContent = paper.abstract;
 
-    const needsAbstractToggle = (paper.abstract || '').length > 360;
+    const needsAbstractToggle = (paper.abstract || '').length > 1000;
     if (needsAbstractToggle) {
       abstractToggle.classList.remove('hidden');
       abstractToggle.textContent = 'Show more';
@@ -578,7 +578,7 @@ function renderAuthorResults() {
 
     const meta = document.createElement('div');
     meta.className = 'author-meta';
-    const authorText = `${paper.authors.slice(0, 3).join(', ')}${paper.authors.length > 3 ? '…' : ''}`;
+    const authorText = paper.authors.join(', ');
     meta.textContent = `${paper.arxiv_id} • ${authorText}`;
 
     text.append(title, meta);
