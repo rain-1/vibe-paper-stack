@@ -123,6 +123,16 @@ function setAuthorLoading(isLoading, label = 'Searching arXiv...') {
   searchSource.disabled = isLoading;
 }
 
+function setSelectOptions(selectEl, options) {
+  selectEl.replaceChildren();
+  for (const option of options) {
+    const node = document.createElement('option');
+    node.value = option.value;
+    node.textContent = option.label;
+    selectEl.append(node);
+  }
+}
+
 function renderAuthorMessage(message, isError = false) {
   authorResults.innerHTML = '';
   const msg = document.createElement('div');
@@ -217,9 +227,11 @@ async function loadProjects() {
   const selected = projectFilter.value;
   state.projects = await api('/api/projects');
 
-  projectFilter.innerHTML = '<option value="">All projects</option>' +
-    '<option value="__none__">No project</option>' +
-    state.projects.map((p) => `<option value="${p.id}">${p.name}</option>`).join('');
+  setSelectOptions(projectFilter, [
+    { value: '', label: 'All projects' },
+    { value: '__none__', label: 'No project' },
+    ...state.projects.map((p) => ({ value: String(p.id), label: p.name })),
+  ]);
 
   if ([...projectFilter.options].some((option) => option.value === selected)) {
     projectFilter.value = selected;
@@ -232,8 +244,10 @@ async function loadTags() {
   const selected = tagFilter.value;
   state.tags = await api('/api/tags');
 
-  tagFilter.innerHTML = '<option value="">All tags</option>' +
-    state.tags.map((tag) => `<option value="${tag.name}">#${tag.name}</option>`).join('');
+  setSelectOptions(tagFilter, [
+    { value: '', label: 'All tags' },
+    ...state.tags.map((tag) => ({ value: tag.name, label: `#${tag.name}` })),
+  ]);
 
   if ([...tagFilter.options].some((option) => option.value === selected)) {
     tagFilter.value = selected;
@@ -479,8 +493,10 @@ function render() {
     statusSelect.addEventListener('change', () => patchPaper(paper.id, { status: statusSelect.value }));
 
     const projectSelect = node.querySelector('.project-select');
-    projectSelect.innerHTML = '<option value="">No project</option>' +
-      state.projects.map((project) => `<option value="${project.id}">${project.name}</option>`).join('');
+    setSelectOptions(projectSelect, [
+      { value: '', label: 'No project' },
+      ...state.projects.map((project) => ({ value: String(project.id), label: project.name })),
+    ]);
     projectSelect.value = paper.project_id ? String(paper.project_id) : '';
     projectSelect.addEventListener('change', async () => {
       const projectValue = projectSelect.value ? Number(projectSelect.value) : null;
