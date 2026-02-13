@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import re
+from io import BytesIO
 from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import unquote, urlparse
 
 import httpx
 from fastapi import HTTPException
+from pypdf import PdfReader
 
-PDF_TIMEOUT = httpx.Timeout(20.0, connect=8.0)
+PDF_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 PDF_HEADERS = {"User-Agent": "vibe-paper-stack/1.0 (mailto:local@localhost)"}
 
 
@@ -46,6 +48,70 @@ def _title_from_url(url: str) -> str:
     return cleaned or "PDF document"
 
 
+def _extract_first_page_text(pdf_bytes: bytes) -> str:
+    reader = PdfReader(BytesIO(pdf_bytes))
+    if not reader.pages:
+        return ""
+
+    text = reader.pages[0].extract_text() or ""
+    text = text.replace("\x00", " ")
+    text = re.sub(r"\r", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _guess_title(lines: list[str], fallback_title: str) -> str:
+    for line in lines[:12]:
+        if line.lower().startswith("abstract"):
+            continue
+        if len(line) < 8 or len(line) > 220:
+            continue
+        if re.search(r"\b(arxiv|doi|http|www\.)\b", line, flags=re.IGNORECASE):
+            continue
+        if sum(ch.isalpha() for ch in line) < 6:
+            continue
+        return line
+    return fallback_title
+
+
+def _extract_abstract(text: str) -> str | None:
+    if not text:
+        return None
+
+    abstract_start = re.search(r"\babstract\b\s*[:\-.]?\s*", text, flags=re.IGNORECASE)
+    if not abstract_start:
+        return None
+
+    start = abstract_start.end()
+    remainder = text[start:]
+    stop = re.search(
+        r"\n\s*(?:1\.?\s+introduction|introduction\b|keywords\b|contents\b|i\.?\s+introduction)",
+        remainder,
+        flags=re.IGNORECASE,
+    )
+    abstract = remainder[: stop.start()] if stop else remainder
+    abstract = re.sub(r"\s+", " ", abstract).strip()
+
+    if len(abstract) < 40:
+        return None
+
+    return abstract[:2200]
+
+
+def _extract_pdf_metadata(pdf_bytes: bytes, fallback_title: str) -> tuple[str, str]:
+    try:
+        text = _extract_first_page_text(pdf_bytes)
+    except Exception:
+        return fallback_title, "Imported from direct PDF URL"
+
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.split("\n")]
+    lines = [line for line in lines if line]
+
+    title = _guess_title(lines, fallback_title)
+    abstract = _extract_abstract(text) or "Imported from direct PDF URL"
+    return title, abstract
+
+
 async def fetch_pdf(value: str) -> dict[str, Any]:
     url = normalize_pdf_url(value)
 
@@ -54,23 +120,30 @@ async def fetch_pdf(value: str) -> dict[str, Any]:
         if response.status_code in {405, 501}:
             response = await client.get(url, headers={"Range": "bytes=0-0"})
 
-    if response.status_code == 404:
-        raise HTTPException(status_code=404, detail="PDF not found at URL")
-    if response.status_code >= 400:
-        raise HTTPException(status_code=502, detail="Unable to fetch PDF right now")
+        if response.status_code == 404:
+            raise HTTPException(status_code=404, detail="PDF not found at URL")
+        if response.status_code >= 400:
+            raise HTTPException(status_code=502, detail="Unable to fetch PDF right now")
 
-    content_type = (response.headers.get("content-type") or "").lower()
-    final_url = str(response.url)
-    if "pdf" not in content_type and not urlparse(final_url).path.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="URL does not appear to be a PDF")
+        content_type = (response.headers.get("content-type") or "").lower()
+        final_url = str(response.url)
+        if "pdf" not in content_type and not urlparse(final_url).path.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="URL does not appear to be a PDF")
 
+        pdf_response = await client.get(final_url)
+
+    if pdf_response.status_code >= 400:
+        raise HTTPException(status_code=502, detail="Unable to download PDF right now")
+
+    final_url = str(pdf_response.url)
     doc_id = hashlib.sha1(final_url.encode("utf-8")).hexdigest()[:16]
-    title = _title_from_url(final_url)
+    fallback_title = _title_from_url(final_url)
+    title, abstract = _extract_pdf_metadata(pdf_response.content, fallback_title)
 
     return {
         "arxiv_id": f"pdf:{doc_id}",
         "title": title,
-        "abstract": "Imported from direct PDF URL",
+        "abstract": abstract,
         "authors": ["Unknown"],
         "categories": ["pdf"],
         "published_at": None,

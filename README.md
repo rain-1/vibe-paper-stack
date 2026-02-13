@@ -3,7 +3,8 @@
 A lightweight local web app to track arXiv papers in a reading queue.
 
 ## Features
-- Import a paper from an arXiv ID or URL (fetches title, abstract, authors, categories)
+- Import a paper from an arXiv ID/URL, LessWrong URL, or direct PDF URL
+- For direct PDF URLs, attempts first-page title/abstract extraction with fallback metadata
 - Find papers by author from arXiv and batch-add selected results
 - Queue workflow: `queued`, `reading`, `done`
 - Project grouping and tagging
