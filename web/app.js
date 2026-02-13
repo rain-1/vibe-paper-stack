@@ -1,6 +1,8 @@
 const papersEl = document.getElementById('papers');
 const template = document.getElementById('paper-template');
 const projectFilter = document.getElementById('project-filter');
+const projectPicker = document.getElementById('project-picker');
+const tagFilter = document.getElementById('tag-filter');
 const statusFilter = document.getElementById('status-filter');
 const searchInput = document.getElementById('search-input');
 const hideDone = document.getElementById('hide-done');
@@ -30,6 +32,7 @@ const LESSWRONG_FAVICON_URL = 'https://www.lesswrong.com/favicon.ico';
 const state = {
   papers: [],
   projects: [],
+  tags: [],
   authorResults: [],
   draggingPaperId: null,
   dragArmedPaperId: null,
@@ -75,7 +78,14 @@ function buildQuery() {
   const params = new URLSearchParams();
   if (searchInput.value.trim()) params.set('q', searchInput.value.trim());
   if (statusFilter.value) params.set('status', statusFilter.value);
-  if (projectFilter.value) params.set('project_id', projectFilter.value);
+
+  if (projectFilter.value === '__none__') {
+    params.set('project_none', 'true');
+  } else if (projectFilter.value) {
+    params.set('project_id', projectFilter.value);
+  }
+
+  if (tagFilter.value) params.set('tag', tagFilter.value);
   params.set('include_done', hideDone.checked ? 'false' : 'true');
   return params.toString();
 }
@@ -168,16 +178,84 @@ async function movePaper(fromPaperId, toPaperId) {
 }
 
 async function loadProjects() {
+  const selected = projectFilter.value;
   state.projects = await api('/api/projects');
+
   projectFilter.innerHTML = '<option value="">All projects</option>' +
+    '<option value="__none__">No project</option>' +
     state.projects.map((p) => `<option value="${p.id}">${p.name}</option>`).join('');
+
+  if ([...projectFilter.options].some((option) => option.value === selected)) {
+    projectFilter.value = selected;
+  }
+
+  renderProjectPicker();
+}
+
+async function loadTags() {
+  const selected = tagFilter.value;
+  state.tags = await api('/api/tags');
+
+  tagFilter.innerHTML = '<option value="">All tags</option>' +
+    state.tags.map((tag) => `<option value="${tag.name}">#${tag.name}</option>`).join('');
+
+  if ([...tagFilter.options].some((option) => option.value === selected)) {
+    tagFilter.value = selected;
+  }
+}
+
+function renderProjectPicker() {
+  projectPicker.innerHTML = '';
+
+  const options = [
+    { value: '', label: 'All projects' },
+    { value: '__none__', label: 'No project' },
+    ...state.projects.map((project) => ({ value: String(project.id), label: project.name })),
+  ];
+
+  for (const option of options) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'project-chip';
+    button.textContent = option.label;
+    button.classList.toggle('active', projectFilter.value === option.value);
+    button.addEventListener('click', () => {
+      projectFilter.value = option.value;
+      renderProjectPicker();
+      loadPapers();
+    });
+    projectPicker.append(button);
+  }
+}
+
+function hashString(input) {
+  let hash = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    hash = ((hash << 5) - hash + input.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function tagStyleFromName(tagName) {
+  const hue = hashString(tagName) % 360;
+  return {
+    background: `hsl(${hue} 88% 94%)`,
+    border: `hsl(${hue} 62% 78%)`,
+    text: `hsl(${hue} 45% 26%)`,
+  };
+}
+
+function applyTagColor(tagEl, tagName) {
+  const style = tagStyleFromName(tagName);
+  tagEl.style.setProperty('--tag-bg', style.background);
+  tagEl.style.setProperty('--tag-border', style.border);
+  tagEl.style.setProperty('--tag-text', style.text);
 }
 
 async function loadPapers() {
   state.papers = await api(`/api/papers?${buildQuery()}`);
   render();
 }
-
 function render() {
   papersEl.innerHTML = '';
   for (const paper of state.papers) {
@@ -276,6 +354,7 @@ function render() {
     const starBtn = node.querySelector('.star-btn');
     starBtn.textContent = paper.starred ? '★' : '☆';
     starBtn.classList.toggle('on', paper.starred);
+    starBtn.title = 'Starred papers are pinned to the top';
     starBtn.addEventListener('click', () => patchPaper(paper.id, { starred: !paper.starred }));
 
     const statusSelect = node.querySelector('.status-select');
@@ -292,12 +371,19 @@ function render() {
     const tagWrap = node.querySelector('.tags');
     for (const tag of paper.tags) {
       const chip = document.createElement('span');
-      chip.className = 'tag';
+      chip.className = 'tag filterable';
       chip.textContent = `#${tag.name}`;
-      chip.title = 'Double click to remove';
+      chip.title = 'Click to filter by this tag. Double click to remove';
+      applyTagColor(chip, tag.name);
+      chip.classList.toggle('filter-active', tagFilter.value === tag.name);
+      chip.addEventListener('click', async () => {
+        tagFilter.value = tag.name;
+        await loadPapers();
+      });
       chip.addEventListener('dblclick', async () => {
         await api(`/api/papers/${paper.id}/tags/${tag.id}`, { method: 'DELETE' });
-        loadPapers();
+        await loadTags();
+        await loadPapers();
       });
       tagWrap.append(chip);
     }
@@ -310,10 +396,11 @@ function render() {
           method: 'POST',
           body: JSON.stringify({ name: tagInput.value.trim() }),
         });
-        loadPapers();
+        tagInput.value = '';
+        await loadTags();
+        await loadPapers();
       }
     });
-
     const notes = node.querySelector('.notes');
     notes.value = paper.notes;
     let timer = null;
@@ -402,8 +489,11 @@ async function patchPaper(id, patch, shouldReload = true) {
   if (shouldReload) await loadPapers();
 }
 
-for (const el of [projectFilter, statusFilter, hideDone]) {
-  el.addEventListener('change', loadPapers);
+for (const el of [projectFilter, tagFilter, statusFilter, hideDone]) {
+  el.addEventListener('change', async () => {
+    if (el === projectFilter) renderProjectPicker();
+    await loadPapers();
+  });
 }
 searchInput.addEventListener('input', () => {
   clearTimeout(searchInput._timer);
@@ -466,5 +556,6 @@ batchAddBtn.addEventListener('click', async () => {
 
 switchTab('tiles');
 await loadProjects();
+await loadTags();
 await loadPapers();
 renderAuthorResults();

@@ -319,6 +319,7 @@ def list_papers(
     q: str | None = None,
     status: str | None = None,
     project_id: int | None = None,
+    project_none: bool = False,
     tag: str | None = None,
     starred: bool | None = None,
     rating_min: int | None = Query(default=None, ge=1, le=5),
@@ -333,7 +334,9 @@ def list_papers(
     if status:
         clauses.append("p.status = ?")
         params.append(status)
-    if project_id:
+    if project_none:
+        clauses.append("p.project_id IS NULL")
+    elif project_id:
         clauses.append("p.project_id = ?")
         params.append(project_id)
     if starred is not None:
@@ -359,7 +362,7 @@ def list_papers(
         FROM papers p
         LEFT JOIN projects pr ON pr.id = p.project_id
         {where}
-        ORDER BY COALESCE(p.sort_order, 2147483647) ASC, p.created_at DESC
+        ORDER BY p.starred DESC, COALESCE(p.sort_order, 2147483647) ASC, p.created_at DESC
         """,
         params,
     ).fetchall()

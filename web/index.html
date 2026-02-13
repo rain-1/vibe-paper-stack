@@ -19,7 +19,8 @@
     <section id="tab-tiles" class="tab-panel">
       <section class="controls">
         <input id="search-input" placeholder="Search title, abstract, authors" />
-        <select id="project-filter"></select>
+        <select id="project-filter" aria-label="Filter by project"></select>
+        <select id="tag-filter" aria-label="Filter by tag"></select>
         <select id="status-filter">
           <option value="">All statuses</option>
           <option value="queued">Queued</option>
@@ -27,6 +28,10 @@
           <option value="done">Done</option>
         </select>
         <label><input id="hide-done" type="checkbox" checked />Hide done</label>
+      </section>
+
+      <section class="project-chooser-wrap">
+        <div id="project-picker" class="project-picker" aria-label="Project picker"></div>
       </section>
 
       <section class="tiles-pane">
