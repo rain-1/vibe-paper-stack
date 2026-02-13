@@ -346,9 +346,15 @@ def list_papers(
         clauses.append("COALESCE(p.rating, 0) >= ?")
         params.append(rating_min)
     if q:
-        clauses.append("(p.title LIKE ? OR p.abstract LIKE ? OR p.authors_json LIKE ?)")
         like = f"%{q}%"
-        params.extend([like, like, like])
+        tag_like = f"%{q.lstrip('#')}%"
+        clauses.append(
+            "("
+            "p.title LIKE ? OR p.abstract LIKE ? OR p.authors_json LIKE ? OR "
+            "EXISTS (SELECT 1 FROM paper_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.paper_id = p.id AND (t.name LIKE ? OR t.name LIKE ?))"
+            ")"
+        )
+        params.extend([like, like, like, like, tag_like])
     if tag:
         clauses.append(
             "EXISTS (SELECT 1 FROM paper_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.paper_id = p.id AND t.name = ?)"
