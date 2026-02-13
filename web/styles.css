@@ -6,6 +6,15 @@ header h1 { margin: 0; font-size: 1.25rem; }
 input, select, button, textarea { border: 1px solid #d4d7dd; border-radius: 8px; padding: .55rem .65rem; font: inherit; }
 button { cursor: pointer; }
 .controls { display: flex; gap: .75rem; padding: .9rem 1.25rem; flex-wrap: wrap; background: #fff; border-bottom: 1px solid #e6e8ed; }
+.discover { padding: .9rem 1.25rem; background: #f8fbff; border-bottom: 1px solid #e6e8ed; }
+.discover h2 { margin: 0 0 .6rem 0; font-size: 1.05rem; }
+.author-form { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: .75rem; }
+.author-form #author-input { min-width: 260px; flex: 1; }
+.author-results { display: grid; gap: .45rem; }
+.author-row { display: grid; grid-template-columns: auto 1fr auto; gap: .5rem; align-items: start; background: white; border: 1px solid #dbe5ef; border-radius: 8px; padding: .5rem .6rem; }
+.author-title { font-weight: 600; }
+.author-meta { font-size: .8rem; color: #4b5563; }
+.author-added { color: #0f766e; font-size: .8rem; }
 main { padding: 1rem 1.25rem; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: .9rem; }
 .card { background: white; border: 1px solid #e6e8ed; border-radius: 12px; padding: .85rem; display: flex; flex-direction: column; gap: .6rem; }

@@ -4,8 +4,9 @@ const projectFilter = document.getElementById('project-filter');
 const statusFilter = document.getElementById('status-filter');
 const searchInput = document.getElementById('search-input');
 const hideDone = document.getElementById('hide-done');
+const authorResults = document.getElementById('author-results');
 
-const state = { papers: [], projects: [] };
+const state = { papers: [], projects: [], authorResults: [] };
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -108,6 +109,63 @@ function render() {
   }
 }
 
+function renderAuthorResults() {
+  authorResults.innerHTML = '';
+  if (state.authorResults.length === 0) {
+    authorResults.textContent = 'No results yet. Search for an author above.';
+    return;
+  }
+
+  for (const paper of state.authorResults) {
+    const row = document.createElement('label');
+    row.className = 'author-row';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = !paper.already_added;
+    checkbox.disabled = paper.already_added;
+    checkbox.dataset.arxivId = paper.arxiv_id;
+
+    const text = document.createElement('div');
+    text.innerHTML = `<div class="author-title">${paper.title}</div>
+      <div class="author-meta">${paper.arxiv_id} • ${paper.authors.slice(0, 3).join(', ')}${paper.authors.length > 3 ? '…' : ''}</div>`;
+
+    const stateBadge = document.createElement('div');
+    stateBadge.className = 'author-added';
+    stateBadge.textContent = paper.already_added ? 'Already added' : 'New';
+
+    row.append(checkbox, text, stateBadge);
+    authorResults.append(row);
+  }
+}
+
+async function searchByAuthor(author, maxResults) {
+  state.authorResults = await api(`/api/arxiv/search-by-author?author=${encodeURIComponent(author)}&max_results=${maxResults}`);
+  renderAuthorResults();
+}
+
+async function batchAddSelected() {
+  const selected = Array.from(authorResults.querySelectorAll('input[type="checkbox"]:checked'))
+    .map((cb) => cb.dataset.arxivId)
+    .filter(Boolean);
+
+  if (selected.length === 0) {
+    alert('Select at least one paper to add.');
+    return;
+  }
+
+  await api('/api/papers/import-arxiv-batch', {
+    method: 'POST',
+    body: JSON.stringify({ values: selected }),
+  });
+  await loadPapers();
+
+  for (const item of state.authorResults) {
+    if (selected.includes(item.arxiv_id)) item.already_added = true;
+  }
+  renderAuthorResults();
+}
+
 async function patchPaper(id, patch, shouldReload = true) {
   await api(`/api/papers/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
   if (shouldReload) await loadPapers();
@@ -137,5 +195,26 @@ document.getElementById('import-form').addEventListener('submit', async (event) 
   }
 });
 
+document.getElementById('author-search-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const author = document.getElementById('author-input').value.trim();
+  const maxResults = Number(document.getElementById('author-max-results').value || 12);
+  if (!author) return;
+  try {
+    await searchByAuthor(author, maxResults);
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+document.getElementById('batch-add-btn').addEventListener('click', async () => {
+  try {
+    await batchAddSelected();
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
 await loadProjects();
 await loadPapers();
+renderAuthorResults();

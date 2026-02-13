@@ -4,6 +4,7 @@ A lightweight local web app to track arXiv papers in a reading queue.
 
 ## Features
 - Import a paper from an arXiv ID or URL (fetches title, abstract, authors, categories)
+- Find papers by author from arXiv and batch-add selected results
 - Queue workflow: `queued`, `reading`, `done`
 - Project grouping and tagging
 - Search by title/abstract/authors
@@ -24,6 +25,8 @@ Open http://127.0.0.1:8000.
 
 ## API highlights
 - `POST /api/papers/import-arxiv`
+- `POST /api/papers/import-arxiv-batch`
+- `GET /api/arxiv/search-by-author`
 - `GET /api/papers` (supports filters)
 - `PATCH /api/papers/{id}`
 - `POST /api/papers/{id}/tags`

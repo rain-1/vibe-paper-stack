@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import sqlite3
@@ -32,6 +33,10 @@ class TagIn(BaseModel):
 
 class ImportArxivIn(BaseModel):
     value: str = Field(min_length=1)
+
+
+class ImportArxivBatchIn(BaseModel):
+    values: list[str] = Field(min_length=1)
 
 
 class PaperPatchIn(BaseModel):
@@ -138,6 +143,83 @@ async def fetch_arxiv(arxiv_id: str) -> dict[str, Any]:
     }
 
 
+async def search_arxiv_by_author(author: str, max_results: int = 20) -> list[dict[str, Any]]:
+    url = "https://export.arxiv.org/api/query"
+    params = {
+        "search_query": f'au:"{author}"',
+        "start": 0,
+        "max_results": max_results,
+        "sortBy": "submittedDate",
+        "sortOrder": "descending",
+    }
+    async with httpx.AsyncClient(timeout=12.0) as client:
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+
+    root = ET.fromstring(response.text)
+    ns = {
+        "atom": "http://www.w3.org/2005/Atom",
+        "arxiv": "http://arxiv.org/schemas/atom",
+    }
+
+    results: list[dict[str, Any]] = []
+    for entry in root.findall("atom:entry", ns):
+        raw_id = entry.findtext("atom:id", default="", namespaces=ns)
+        arxiv_id = normalize_arxiv_id(raw_id)
+        title = (entry.findtext("atom:title", default="", namespaces=ns) or "").strip().replace("\n", " ")
+        summary = (entry.findtext("atom:summary", default="", namespaces=ns) or "").strip()
+        published = entry.findtext("atom:published", default=None, namespaces=ns)
+        authors = [
+            (author_el.findtext("atom:name", default="", namespaces=ns) or "").strip()
+            for author_el in entry.findall("atom:author", ns)
+        ]
+        categories = [cat.get("term", "") for cat in entry.findall("atom:category", ns)]
+        link = f"https://arxiv.org/abs/{arxiv_id}"
+        results.append(
+            {
+                "arxiv_id": arxiv_id,
+                "title": title,
+                "abstract": summary,
+                "authors": [a for a in authors if a],
+                "categories": [c for c in categories if c],
+                "published_at": published,
+                "arxiv_url": link,
+            }
+        )
+    return results
+
+
+def upsert_paper(conn: sqlite3.Connection, meta: dict[str, Any]) -> sqlite3.Row:
+    conn.execute(
+        """
+        INSERT INTO papers (arxiv_id, title, abstract, authors_json, categories_json, published_at, arxiv_url)
+        VALUES (:arxiv_id, :title, :abstract, :authors_json, :categories_json, :published_at, :arxiv_url)
+        ON CONFLICT(arxiv_id) DO UPDATE SET
+            title=excluded.title,
+            abstract=excluded.abstract,
+            authors_json=excluded.authors_json,
+            categories_json=excluded.categories_json,
+            published_at=excluded.published_at,
+            arxiv_url=excluded.arxiv_url,
+            updated_at=CURRENT_TIMESTAMP
+        """,
+        {
+            **meta,
+            "authors_json": json.dumps(meta["authors"]),
+            "categories_json": json.dumps(meta["categories"]),
+        },
+    )
+    return conn.execute(
+        """
+        SELECT p.*, pr.name AS project_name
+        FROM papers p
+        LEFT JOIN projects pr ON pr.id = p.project_id
+        WHERE p.arxiv_id = ?
+        """,
+        (meta["arxiv_id"],),
+    ).fetchone()
+
+
 @app.on_event("startup")
 def startup() -> None:
     init_db()
@@ -199,37 +281,42 @@ async def import_arxiv(payload: ImportArxivIn) -> dict[str, Any]:
 
     conn = get_connection()
     with conn:
-        conn.execute(
-            """
-            INSERT INTO papers (arxiv_id, title, abstract, authors_json, categories_json, published_at, arxiv_url)
-            VALUES (:arxiv_id, :title, :abstract, :authors_json, :categories_json, :published_at, :arxiv_url)
-            ON CONFLICT(arxiv_id) DO UPDATE SET
-                title=excluded.title,
-                abstract=excluded.abstract,
-                authors_json=excluded.authors_json,
-                categories_json=excluded.categories_json,
-                published_at=excluded.published_at,
-                arxiv_url=excluded.arxiv_url,
-                updated_at=CURRENT_TIMESTAMP
-            """,
-            {
-                **meta,
-                "authors_json": json.dumps(meta["authors"]),
-                "categories_json": json.dumps(meta["categories"]),
-            },
-        )
-        row = conn.execute(
-            """
-            SELECT p.*, pr.name AS project_name
-            FROM papers p
-            LEFT JOIN projects pr ON pr.id = p.project_id
-            WHERE p.arxiv_id = ?
-            """,
-            (arxiv_id,),
-        ).fetchone()
+        row = upsert_paper(conn, meta)
     paper = row_to_paper(conn, row)
     conn.close()
     return paper
+
+
+@app.post("/api/papers/import-arxiv-batch")
+async def import_arxiv_batch(payload: ImportArxivBatchIn) -> list[dict[str, Any]]:
+    normalized_ids = []
+    for value in payload.values:
+        normalized_ids.append(normalize_arxiv_id(value))
+
+    unique_ids = list(dict.fromkeys(normalized_ids))
+    metas = await asyncio.gather(*[fetch_arxiv(arxiv_id) for arxiv_id in unique_ids])
+
+    conn = get_connection()
+    papers: list[dict[str, Any]] = []
+    with conn:
+        for meta in metas:
+            row = upsert_paper(conn, meta)
+            papers.append(row_to_paper(conn, row))
+    conn.close()
+    return papers
+
+
+@app.get("/api/arxiv/search-by-author")
+async def arxiv_search_by_author(author: str = Query(min_length=2), max_results: int = Query(default=20, ge=1, le=50)) -> list[dict[str, Any]]:
+    results = await search_arxiv_by_author(author, max_results)
+    conn = get_connection()
+    existing_rows = conn.execute("SELECT arxiv_id FROM papers WHERE arxiv_id IS NOT NULL").fetchall()
+    conn.close()
+    existing_ids = {row["arxiv_id"] for row in existing_rows}
+
+    for item in results:
+        item["already_added"] = item["arxiv_id"] in existing_ids
+    return results
 
 
 @app.get("/api/papers")
