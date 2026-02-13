@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vibe Paper Stack</title>
+    <link rel="stylesheet" href="/web/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Vibe Paper Stack</h1>
+      <form id="import-form">
+        <input id="arxiv-input" placeholder="Paste arXiv id or URL" required />
+        <button type="submit">Import</button>
+      </form>
+    </header>
+
+    <section class="controls">
+      <input id="search-input" placeholder="Search title, abstract, authors" />
+      <select id="project-filter"></select>
+      <select id="status-filter">
+        <option value="">All statuses</option>
+        <option value="queued">Queued</option>
+        <option value="reading">Reading</option>
+        <option value="done">Done</option>
+      </select>
+      <label><input id="hide-done" type="checkbox" checked />Hide done</label>
+    </section>
+
+    <main>
+      <div id="papers" class="grid"></div>
+    </main>
+
+    <template id="paper-template">
+      <article class="card">
+        <div class="card-top">
+          <h3 class="title"></h3>
+          <button class="star-btn">☆</button>
+        </div>
+        <div class="meta"></div>
+        <p class="abstract"></p>
+        <div class="controls-row">
+          <select class="status-select">
+            <option value="queued">Queued</option>
+            <option value="reading">Reading</option>
+            <option value="done">Done</option>
+          </select>
+          <select class="rating-select">
+            <option value="">Rating</option>
+            <option value="1">★☆☆☆☆</option>
+            <option value="2">★★☆☆☆</option>
+            <option value="3">★★★☆☆</option>
+            <option value="4">★★★★☆</option>
+            <option value="5">★★★★★</option>
+          </select>
+          <input class="tag-input" placeholder="tag + enter" />
+        </div>
+        <div class="tags"></div>
+        <textarea class="notes" rows="3" placeholder="Notes..."></textarea>
+      </article>
+    </template>
+
+    <script src="/web/app.js" type="module"></script>
+  </body>
+</html>
