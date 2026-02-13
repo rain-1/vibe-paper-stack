@@ -195,6 +195,50 @@ def get_projects() -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+
+@app.get('/api/projects/summary')
+def get_projects_summary(include_done: bool = True) -> dict[str, Any]:
+    conn = get_connection()
+
+    project_rows = conn.execute(
+        """
+        SELECT
+            pr.id,
+            pr.name,
+            COUNT(p.id) AS total,
+            SUM(CASE WHEN p.status = 'queued' THEN 1 ELSE 0 END) AS queued,
+            SUM(CASE WHEN p.status = 'reading' THEN 1 ELSE 0 END) AS reading,
+            SUM(CASE WHEN p.status = 'done' THEN 1 ELSE 0 END) AS done
+        FROM projects pr
+        LEFT JOIN papers p ON p.project_id = pr.id
+        GROUP BY pr.id, pr.name
+        ORDER BY pr.name COLLATE NOCASE
+        """
+    ).fetchall()
+
+    if include_done:
+        unassigned = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM papers
+            WHERE project_id IS NULL
+            """
+        ).fetchone()['count']
+    else:
+        unassigned = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM papers
+            WHERE project_id IS NULL AND status != 'done'
+            """
+        ).fetchone()['count']
+
+    conn.close()
+    return {
+        'projects': [dict(row) for row in project_rows],
+        'unassigned_count': unassigned,
+    }
+
 @app.post("/api/projects")
 def create_project(payload: ProjectIn) -> dict[str, Any]:
     conn = get_connection()

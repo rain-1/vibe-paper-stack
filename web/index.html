@@ -13,6 +13,7 @@
 
     <nav class="tabs" aria-label="Main sections">
       <button id="tab-tiles-btn" class="tab-btn active" type="button" data-tab="tiles">Tiles</button>
+      <button id="tab-projects-btn" class="tab-btn" type="button" data-tab="projects">Projects</button>
       <button id="tab-search-btn" class="tab-btn" type="button" data-tab="search">Search</button>
       <button id="tab-data-btn" class="tab-btn" type="button" data-tab="data">Data</button>
     </nav>
@@ -49,6 +50,18 @@
         <main>
           <div id="papers" class="grid"></div>
         </main>
+      </section>
+    </section>
+
+    <section id="tab-projects" class="tab-panel hidden">
+      <section class="discover">
+        <h2>Projects</h2>
+        <form id="project-create-form" class="project-form">
+          <input id="project-name-input" placeholder="New project name" required />
+          <button id="project-create-btn" type="submit">Create Project</button>
+        </form>
+        <div id="project-create-status" class="status-message hidden" role="status" aria-live="polite"></div>
+        <div id="project-summary-list" class="project-summary-list"></div>
       </section>
     </section>
 
@@ -121,6 +134,9 @@
             <option value="5">★★★★★</option>
           </select>
           <input class="tag-input" placeholder="tag + enter" />
+        </div>
+        <div class="project-row">
+          <select class="project-select"></select>
         </div>
         <div class="tags"></div>
         <textarea class="notes" rows="3" placeholder="Notes..."></textarea>

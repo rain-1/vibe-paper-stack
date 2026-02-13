@@ -25,11 +25,18 @@ const importDataBtn = document.getElementById('import-data-btn');
 const importDataFile = document.getElementById('import-data-file');
 const exportStatus = document.getElementById('export-status');
 const dataImportStatus = document.getElementById('data-import-status');
+const projectCreateForm = document.getElementById('project-create-form');
+const projectNameInput = document.getElementById('project-name-input');
+const projectCreateBtn = document.getElementById('project-create-btn');
+const projectCreateStatus = document.getElementById('project-create-status');
+const projectSummaryList = document.getElementById('project-summary-list');
 
 const tabTilesBtn = document.getElementById('tab-tiles-btn');
+const tabProjectsBtn = document.getElementById('tab-projects-btn');
 const tabSearchBtn = document.getElementById('tab-search-btn');
 const tabDataBtn = document.getElementById('tab-data-btn');
 const tabTiles = document.getElementById('tab-tiles');
+const tabProjects = document.getElementById('tab-projects');
 const tabSearch = document.getElementById('tab-search');
 const tabData = document.getElementById('tab-data');
 
@@ -41,6 +48,7 @@ const state = {
   papers: [],
   projects: [],
   tags: [],
+  projectSummary: { projects: [], unassigned_count: 0 },
   authorResults: [],
   draggingPaperId: null,
   dragArmedPaperId: null,
@@ -75,13 +83,16 @@ function setStatus(target, message = '', type = '') {
 function switchTab(tabName) {
   state.activeTab = tabName;
   const showTiles = tabName === 'tiles';
+  const showProjects = tabName === 'projects';
   const showSearch = tabName === 'search';
   const showData = tabName === 'data';
 
   tabTiles.classList.toggle('hidden', !showTiles);
+  tabProjects.classList.toggle('hidden', !showProjects);
   tabSearch.classList.toggle('hidden', !showSearch);
   tabData.classList.toggle('hidden', !showData);
   tabTilesBtn.classList.toggle('active', showTiles);
+  tabProjectsBtn.classList.toggle('active', showProjects);
   tabSearchBtn.classList.toggle('active', showSearch);
   tabDataBtn.classList.toggle('active', showData);
 }
@@ -253,6 +264,58 @@ function renderProjectPicker() {
   }
 }
 
+async function loadProjectSummary() {
+  state.projectSummary = await api('/api/projects/summary?include_done=true');
+  renderProjectsPanel();
+}
+
+function applyProjectFilterAndShowTiles(projectValue) {
+  projectFilter.value = projectValue;
+  renderProjectPicker();
+  switchTab('tiles');
+  loadPapers();
+}
+
+function renderProjectsPanel() {
+  projectSummaryList.innerHTML = '';
+
+  const unassignedRow = document.createElement('div');
+  unassignedRow.className = 'project-summary-row';
+  unassignedRow.innerHTML = `
+    <div>
+      <div class="project-summary-name">No project</div>
+      <div class="project-summary-meta">${state.projectSummary.unassigned_count || 0} paper(s)</div>
+    </div>
+    <div class="project-summary-actions">
+      <button type="button">View</button>
+    </div>
+  `;
+  unassignedRow.querySelector('button').addEventListener('click', () => applyProjectFilterAndShowTiles('__none__'));
+  projectSummaryList.append(unassignedRow);
+
+  for (const project of state.projectSummary.projects || []) {
+    const row = document.createElement('div');
+    row.className = 'project-summary-row';
+    row.innerHTML = `
+      <div>
+        <div class="project-summary-name">${project.name}</div>
+        <div class="project-summary-meta">${project.total} total • ${project.queued} queued • ${project.reading} reading • ${project.done} done</div>
+      </div>
+      <div class="project-summary-actions">
+        <button type="button">View</button>
+      </div>
+    `;
+    row.querySelector('button').addEventListener('click', () => applyProjectFilterAndShowTiles(String(project.id)));
+    projectSummaryList.append(row);
+  }
+
+  if ((state.projectSummary.projects || []).length === 0) {
+    const msg = document.createElement('div');
+    msg.className = 'author-message';
+    msg.textContent = 'No projects yet. Create one above and assign papers from tiles.';
+    projectSummaryList.append(msg);
+  }
+}
 function hashString(input) {
   let hash = 0;
   for (let i = 0; i < input.length; i += 1) {
@@ -386,6 +449,7 @@ function render() {
       event.preventDefault();
     });
 
+
     const starBtn = node.querySelector('.star-btn');
     starBtn.textContent = paper.starred ? '★' : '☆';
     starBtn.classList.toggle('on', paper.starred);
@@ -396,13 +460,21 @@ function render() {
     statusSelect.value = paper.status;
     statusSelect.addEventListener('change', () => patchPaper(paper.id, { status: statusSelect.value }));
 
+    const projectSelect = node.querySelector('.project-select');
+    projectSelect.innerHTML = '<option value="">No project</option>' +
+      state.projects.map((project) => `<option value="${project.id}">${project.name}</option>`).join('');
+    projectSelect.value = paper.project_id ? String(paper.project_id) : '';
+    projectSelect.addEventListener('change', async () => {
+      const projectValue = projectSelect.value ? Number(projectSelect.value) : null;
+      await patchPaper(paper.id, { project_id: projectValue });
+    });
+
     const ratingSelect = node.querySelector('.rating-select');
     ratingSelect.value = paper.rating || '';
     ratingSelect.addEventListener('change', () => {
       const value = ratingSelect.value ? Number(ratingSelect.value) : null;
       patchPaper(paper.id, { rating: value });
     });
-
     const tagWrap = node.querySelector('.tags');
     for (const tag of paper.tags) {
       const chip = document.createElement('span');
@@ -510,6 +582,7 @@ async function batchAddSelected() {
     body: JSON.stringify({ papers: selectedPapers }),
   });
   await loadPapers();
+  await loadProjectSummary();
 
   for (const item of state.authorResults) {
     if (selected.includes(item.arxiv_id)) item.already_added = true;
@@ -521,8 +594,12 @@ async function batchAddSelected() {
 
 async function patchPaper(id, patch, shouldReload = true) {
   await api(`/api/papers/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
-  if (shouldReload) await loadPapers();
+  if (shouldReload) {
+    await loadPapers();
+    await loadProjectSummary();
+  }
 }
+
 
 function buildExportFilename() {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -571,6 +648,7 @@ async function importDataSnapshot() {
     await loadProjects();
     await loadTags();
     await loadPapers();
+    await loadProjectSummary();
     setStatus(
       dataImportStatus,
       `Imported ${result.imported_papers} paper${result.imported_papers === 1 ? '' : 's'}. Total papers: ${result.total_papers}.`,
@@ -595,10 +673,35 @@ searchInput.addEventListener('input', () => {
   searchInput._timer = setTimeout(loadPapers, 250);
 });
 
+
 tabTilesBtn.addEventListener('click', () => switchTab('tiles'));
+tabProjectsBtn.addEventListener('click', () => switchTab('projects'));
 tabSearchBtn.addEventListener('click', () => switchTab('search'));
 tabDataBtn.addEventListener('click', () => switchTab('data'));
 
+projectCreateForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const name = projectNameInput.value.trim();
+  if (!name) return;
+
+  projectCreateBtn.disabled = true;
+  setStatus(projectCreateStatus);
+  try {
+    await api('/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    });
+    projectNameInput.value = '';
+    await loadProjects();
+    await loadProjectSummary();
+    await loadPapers();
+    setStatus(projectCreateStatus, 'Project created.', 'success');
+  } catch (err) {
+    setStatus(projectCreateStatus, `Project create failed: ${err.message}`, 'error');
+  } finally {
+    projectCreateBtn.disabled = false;
+  }
+});
 document.getElementById('import-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const input = document.getElementById('arxiv-input');
@@ -612,6 +715,7 @@ document.getElementById('import-form').addEventListener('submit', async (event) 
     });
     input.value = '';
     await loadPapers();
+    await loadProjectSummary();
     setStatus(importStatus, 'Paper imported successfully.', 'success');
     switchTab('tiles');
   } catch (err) {
@@ -656,5 +760,6 @@ importDataBtn.addEventListener('click', importDataSnapshot);
 switchTab('tiles');
 await loadProjects();
 await loadTags();
+await loadProjectSummary();
 await loadPapers();
 renderAuthorResults();
