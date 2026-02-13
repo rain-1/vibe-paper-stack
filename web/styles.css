@@ -4,8 +4,11 @@
    ========================================================================== */
 
 @font-face {
-  font-family: 'Chicago';
-  src: local('Chicago'), local('ChicagoFLF');
+  font-family: 'ChicagoFLF';
+  src: url('/web/fonts/ChicagoFLF.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
 }
 
 :root {
@@ -37,8 +40,9 @@
   --tag-default-border: #8899CC;
   --shadow-raised: inset 1px 1px 0 var(--border-light), inset -1px -1px 0 var(--border-dark);
   --shadow-sunken: inset 1px 1px 0 var(--border-dark), inset -1px -1px 0 var(--border-light);
+  --font-system: 'ChicagoFLF', Chicago, 'Charcoal', Geneva, 'Lucida Grande', 'Helvetica Neue', Helvetica, Arial, sans-serif;
 
-  font-family: Chicago, 'ChicagoFLF', 'Charcoal', Geneva, 'Lucida Grande', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-family: var(--font-system);
   font-size: 13px;
   -webkit-font-smoothing: none;
   -moz-osx-font-smoothing: unset;
@@ -92,8 +96,9 @@ header::before {
 
 header h1 {
   margin: 0;
-  font-size: 13px;
-  font-weight: bold;
+  font-family: var(--font-system);
+  font-size: 14px;
+  font-weight: normal;
   text-align: center;
   flex: 1;
   color: var(--text);
@@ -173,7 +178,8 @@ button:disabled {
   color: var(--text);
   padding: 3px 14px;
   border-radius: 4px 4px 0 0;
-  font-weight: bold;
+  font-family: var(--font-system);
+  font-weight: normal;
   font-size: 12px;
   margin-right: 2px;
   position: relative;
@@ -265,8 +271,9 @@ button:disabled {
 
 .discover h2 {
   margin: 0 0 6px 0;
+  font-family: var(--font-system);
   font-size: 13px;
-  font-weight: bold;
+  font-weight: normal;
 }
 
 .tiles-pane {
@@ -502,8 +509,9 @@ main { padding: 0; }
 .title {
   margin: 0;
   padding: 0 6px;
+  font-family: var(--font-system);
   font-size: 12px;
-  font-weight: bold;
+  font-weight: normal;
   line-height: 1.25;
   flex: 1;
   min-width: 0;
