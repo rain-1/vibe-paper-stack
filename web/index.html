@@ -110,36 +110,46 @@
 
     <template id="paper-template">
       <article class="card">
-        <div class="card-top">
+        <div class="card-titlebar">
+          <button class="drag-handle" type="button" title="Drag to reorder" aria-label="Drag to reorder"></button>
           <h3 class="title"></h3>
-          <button class="drag-handle" type="button" title="Drag to reorder" aria-label="Drag to reorder">Drag</button>
           <button class="star-btn">☆</button>
         </div>
-        <div class="meta"></div>
-        <p class="abstract"></p>
-        <button class="abstract-toggle hidden" type="button" aria-expanded="false">Show more</button>
-        <a class="open-paper-link" target="_blank" rel="noopener noreferrer">Open paper</a>
-        <div class="controls-row">
-          <select class="status-select">
-            <option value="queued">Queued</option>
-            <option value="reading">Reading</option>
-            <option value="done">Done</option>
-          </select>
-          <select class="rating-select">
-            <option value="">Rating</option>
-            <option value="1">★☆☆☆☆</option>
-            <option value="2">★★☆☆☆</option>
-            <option value="3">★★★☆☆</option>
-            <option value="4">★★★★☆</option>
-            <option value="5">★★★★★</option>
-          </select>
-          <select class="project-select"></select>
+        <div class="card-toolbar">
+          <div class="meta"></div>
+          <div class="toolbar-actions">
+            <a class="open-paper-link" target="_blank" rel="noopener noreferrer">Open</a>
+          </div>
         </div>
-        <div class="project-row">
-          <input class="tag-input" placeholder="tag + enter" />
+        <div class="card-body">
+          <div class="abstract-wrap">
+            <p class="abstract"></p>
+            <button class="abstract-toggle hidden" type="button" aria-expanded="false">Show more</button>
+          </div>
+          <div class="card-controls">
+            <div class="controls-row">
+              <label class="control-label">Status<select class="status-select">
+                <option value="queued">Queued</option>
+                <option value="reading">Reading</option>
+                <option value="done">Done</option>
+              </select></label>
+              <label class="control-label">Rating<select class="rating-select">
+                <option value="">—</option>
+                <option value="1">★</option>
+                <option value="2">★★</option>
+                <option value="3">★★★</option>
+                <option value="4">★★★★</option>
+                <option value="5">★★★★★</option>
+              </select></label>
+              <label class="control-label">Project<select class="project-select"></select></label>
+            </div>
+            <div class="tag-row">
+              <div class="tags"></div>
+              <input class="tag-input" placeholder="+ tag" />
+            </div>
+          </div>
+          <textarea class="notes" rows="2" placeholder="Notes..."></textarea>
         </div>
-        <div class="tags"></div>
-        <textarea class="notes" rows="3" placeholder="Notes..."></textarea>
       </article>
     </template>
 
