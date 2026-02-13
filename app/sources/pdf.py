@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
 from io import BytesIO
@@ -138,7 +139,7 @@ async def fetch_pdf(value: str) -> dict[str, Any]:
     final_url = str(pdf_response.url)
     doc_id = hashlib.sha1(final_url.encode("utf-8")).hexdigest()[:16]
     fallback_title = _title_from_url(final_url)
-    title, abstract = _extract_pdf_metadata(pdf_response.content, fallback_title)
+    title, abstract = await asyncio.to_thread(_extract_pdf_metadata, pdf_response.content, fallback_title)
 
     return {
         "arxiv_id": f"pdf:{doc_id}",

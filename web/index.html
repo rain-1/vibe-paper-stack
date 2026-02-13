@@ -17,6 +17,15 @@
     </nav>
 
     <section id="tab-tiles" class="tab-panel">
+      <section class="discover">
+        <h2>Add Papers</h2>
+        <form id="import-form" class="import-form">
+          <input id="arxiv-input" placeholder="Paste arXiv, LessWrong, or PDF URL" required />
+          <button id="import-submit-btn" type="submit">Import</button>
+        </form>
+        <div id="import-status" class="status-message hidden" role="status" aria-live="polite"></div>
+      </section>
+
       <section class="controls">
         <input id="search-input" placeholder="Search title, abstract, authors, #tags" />
         <select id="project-filter" aria-label="Filter by project"></select>
@@ -43,15 +52,6 @@
     </section>
 
     <section id="tab-search" class="tab-panel hidden">
-      <section class="discover">
-        <h2>Add Papers</h2>
-        <form id="import-form" class="import-form">
-          <input id="arxiv-input" placeholder="Paste arXiv, LessWrong, or PDF URL" required />
-          <button id="import-submit-btn" type="submit">Import</button>
-        </form>
-        <div id="import-status" class="status-message hidden" role="status" aria-live="polite"></div>
-      </section>
-
       <section class="discover">
         <h2>Search Sources</h2>
         <form id="author-search-form" class="author-form">
