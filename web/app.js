@@ -28,6 +28,7 @@ const tabSearch = document.getElementById('tab-search');
 
 const ARXIV_FAVICON_URL = 'https://static.arxiv.org/static/base/0.17.8/images/icons/favicon.ico';
 const LESSWRONG_FAVICON_URL = 'https://www.lesswrong.com/favicon.ico';
+const PDF_FAVICON_URL = '/web/pdf-icon.svg';
 
 const state = {
   papers: [],
@@ -116,9 +117,12 @@ function clearDragClasses() {
 }
 
 function sourceBadgeInfo(paper) {
-  const isLessWrong = String(paper.arxiv_id || '').startsWith('lw:');
-  if (isLessWrong) {
+  const sourceId = String(paper.arxiv_id || '');
+  if (sourceId.startsWith('lw:')) {
     return { name: 'LW', icon: LESSWRONG_FAVICON_URL };
+  }
+  if (sourceId.startsWith('pdf:')) {
+    return { name: 'PDF', icon: PDF_FAVICON_URL };
   }
   return { name: 'arXiv', icon: ARXIV_FAVICON_URL };
 }
