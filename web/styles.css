@@ -119,6 +119,22 @@ main { padding: 0; }
   text-decoration: underline;
 }
 
+.open-paper-link {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  font-size: .86rem;
+  font-weight: 600;
+  color: #0f766e;
+  text-decoration: none;
+}
+
+.open-paper-link:hover {
+  color: #0f766e;
+  text-decoration: underline;
+}
+
 .card.dragging {
   opacity: .45;
   border-color: #93c5fd;

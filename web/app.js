@@ -127,6 +127,16 @@ function sourceBadgeInfo(paper) {
   return { name: 'arXiv', icon: ARXIV_FAVICON_URL };
 }
 
+function paperOpenUrl(paper) {
+  if (paper.arxiv_url) return paper.arxiv_url;
+
+  const sourceId = String(paper.arxiv_id || '');
+  if (sourceId.startsWith('lw:')) return `https://www.lesswrong.com/posts/${sourceId.slice(3)}`;
+  if (sourceId.startsWith('pdf:')) return null;
+  if (sourceId) return `https://arxiv.org/abs/${sourceId}`;
+  return null;
+}
+
 function setMetaContent(metaEl, paper) {
   metaEl.innerHTML = '';
   const source = sourceBadgeInfo(paper);
@@ -291,6 +301,16 @@ function render() {
     } else {
       abstractToggle.classList.add('hidden');
       abstractEl.classList.remove('expanded');
+    }
+
+    const openPaperLink = node.querySelector('.open-paper-link');
+    const openUrl = paperOpenUrl(paper);
+    if (openUrl) {
+      openPaperLink.href = openUrl;
+      openPaperLink.classList.remove('hidden');
+    } else {
+      openPaperLink.removeAttribute('href');
+      openPaperLink.classList.add('hidden');
     }
 
     dragHandle.addEventListener('mousedown', () => {
