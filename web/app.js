@@ -20,11 +20,18 @@ const importSubmitBtn = document.getElementById('import-submit-btn');
 const importStatus = document.getElementById('import-status');
 const authorStatus = document.getElementById('author-status');
 const tilesStatus = document.getElementById('tiles-status');
+const exportDataBtn = document.getElementById('export-data-btn');
+const importDataBtn = document.getElementById('import-data-btn');
+const importDataFile = document.getElementById('import-data-file');
+const exportStatus = document.getElementById('export-status');
+const dataImportStatus = document.getElementById('data-import-status');
 
 const tabTilesBtn = document.getElementById('tab-tiles-btn');
 const tabSearchBtn = document.getElementById('tab-search-btn');
+const tabDataBtn = document.getElementById('tab-data-btn');
 const tabTiles = document.getElementById('tab-tiles');
 const tabSearch = document.getElementById('tab-search');
+const tabData = document.getElementById('tab-data');
 
 const ARXIV_FAVICON_URL = 'https://static.arxiv.org/static/base/0.17.8/images/icons/favicon.ico';
 const LESSWRONG_FAVICON_URL = 'https://www.lesswrong.com/favicon.ico';
@@ -68,11 +75,15 @@ function setStatus(target, message = '', type = '') {
 function switchTab(tabName) {
   state.activeTab = tabName;
   const showTiles = tabName === 'tiles';
+  const showSearch = tabName === 'search';
+  const showData = tabName === 'data';
 
   tabTiles.classList.toggle('hidden', !showTiles);
-  tabSearch.classList.toggle('hidden', showTiles);
+  tabSearch.classList.toggle('hidden', !showSearch);
+  tabData.classList.toggle('hidden', !showData);
   tabTilesBtn.classList.toggle('active', showTiles);
-  tabSearchBtn.classList.toggle('active', !showTiles);
+  tabSearchBtn.classList.toggle('active', showSearch);
+  tabDataBtn.classList.toggle('active', showData);
 }
 
 function buildQuery() {
@@ -513,6 +524,66 @@ async function patchPaper(id, patch, shouldReload = true) {
   if (shouldReload) await loadPapers();
 }
 
+function buildExportFilename() {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return `vibe-paper-stack-${stamp}.json`;
+}
+
+async function exportDataSnapshot() {
+  setStatus(exportStatus);
+  exportDataBtn.disabled = true;
+  try {
+    const payload = await api('/api/data/export');
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const href = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = href;
+    link.download = buildExportFilename();
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(href);
+    setStatus(exportStatus, `Exported ${payload.papers.length} paper${payload.papers.length === 1 ? '' : 's'}.`, 'success');
+  } catch (err) {
+    setStatus(exportStatus, `Export failed: ${err.message}`, 'error');
+  } finally {
+    exportDataBtn.disabled = false;
+  }
+}
+
+async function importDataSnapshot() {
+  setStatus(dataImportStatus);
+  const selected = importDataFile.files && importDataFile.files[0];
+  if (!selected) {
+    setStatus(dataImportStatus, 'Choose a JSON file to import.', 'error');
+    return;
+  }
+
+  importDataBtn.disabled = true;
+  try {
+    const text = await selected.text();
+    const payload = JSON.parse(text);
+    const result = await api('/api/data/import', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+
+    await loadProjects();
+    await loadTags();
+    await loadPapers();
+    setStatus(
+      dataImportStatus,
+      `Imported ${result.imported_papers} paper${result.imported_papers === 1 ? '' : 's'}. Total papers: ${result.total_papers}.`,
+      'success'
+    );
+    switchTab('tiles');
+  } catch (err) {
+    setStatus(dataImportStatus, `Import failed: ${err.message}`, 'error');
+  } finally {
+    importDataBtn.disabled = false;
+  }
+}
+
 for (const el of [projectFilter, tagFilter, statusFilter, hideDone]) {
   el.addEventListener('change', async () => {
     if (el === projectFilter) renderProjectPicker();
@@ -526,6 +597,7 @@ searchInput.addEventListener('input', () => {
 
 tabTilesBtn.addEventListener('click', () => switchTab('tiles'));
 tabSearchBtn.addEventListener('click', () => switchTab('search'));
+tabDataBtn.addEventListener('click', () => switchTab('data'));
 
 document.getElementById('import-form').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -577,6 +649,9 @@ batchAddBtn.addEventListener('click', async () => {
     setStatus(authorStatus, `Batch add failed: ${err.message}`, 'error');
   }
 });
+
+exportDataBtn.addEventListener('click', exportDataSnapshot);
+importDataBtn.addEventListener('click', importDataSnapshot);
 
 switchTab('tiles');
 await loadProjects();

@@ -14,6 +14,7 @@
     <nav class="tabs" aria-label="Main sections">
       <button id="tab-tiles-btn" class="tab-btn active" type="button" data-tab="tiles">Tiles</button>
       <button id="tab-search-btn" class="tab-btn" type="button" data-tab="search">Search</button>
+      <button id="tab-data-btn" class="tab-btn" type="button" data-tab="data">Data</button>
     </nav>
 
     <section id="tab-tiles" class="tab-panel">
@@ -70,6 +71,27 @@
         </div>
         <div id="author-status" class="status-message hidden" role="status" aria-live="polite"></div>
         <div id="author-results" class="author-results"></div>
+      </section>
+    </section>
+
+    <section id="tab-data" class="tab-panel hidden">
+      <section class="discover">
+        <h2>Export</h2>
+        <p class="hint">Download a full JSON snapshot (papers, tags, projects, notes, status, ordering).</p>
+        <div class="data-actions">
+          <button id="export-data-btn" type="button">Export JSON</button>
+        </div>
+        <div id="export-status" class="status-message hidden" role="status" aria-live="polite"></div>
+      </section>
+
+      <section class="discover">
+        <h2>Import</h2>
+        <p class="hint">Import a previously exported JSON file. Existing papers are merged by source id.</p>
+        <div class="data-actions">
+          <input id="import-data-file" type="file" accept="application/json,.json" />
+          <button id="import-data-btn" type="button">Import JSON</button>
+        </div>
+        <div id="data-import-status" class="status-message hidden" role="status" aria-live="polite"></div>
       </section>
     </section>
 

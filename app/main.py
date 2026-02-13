@@ -68,6 +68,30 @@ class PaperReorderIn(BaseModel):
     paper_ids: list[int] = Field(min_length=1)
 
 
+class DataPaperIn(BaseModel):
+    arxiv_id: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    abstract: str = ""
+    authors: list[str] = Field(default_factory=list)
+    categories: list[str] = Field(default_factory=list)
+    published_at: str | None = None
+    arxiv_url: str | None = None
+    status: Literal["queued", "reading", "done"] = "queued"
+    project: str | None = None
+    rating: int | None = Field(default=None, ge=1, le=5)
+    starred: bool = False
+    notes: str = ""
+    tags: list[str] = Field(default_factory=list)
+    sort_order: int | None = None
+
+
+class DataImportIn(BaseModel):
+    version: int = 1
+    projects: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    papers: list[DataPaperIn] = Field(default_factory=list)
+
+
 app = FastAPI(title="Vibe Paper Stack")
 app.add_middleware(
     CORSMiddleware,
@@ -466,6 +490,114 @@ def remove_paper_tag(paper_id: int, tag_id: int) -> dict[str, Any]:
     return {"ok": True}
 
 
-@app.get("/")
+
+@app.get('/api/data/export')
+def export_data() -> dict[str, Any]:
+    conn = get_connection()
+
+    project_rows = conn.execute('SELECT name FROM projects ORDER BY name COLLATE NOCASE').fetchall()
+    tag_rows = conn.execute('SELECT name FROM tags ORDER BY name COLLATE NOCASE').fetchall()
+    paper_rows = conn.execute(
+        '''
+        SELECT p.*, pr.name AS project_name
+        FROM papers p
+        LEFT JOIN projects pr ON pr.id = p.project_id
+        ORDER BY COALESCE(p.sort_order, 2147483647) ASC, p.created_at DESC
+        '''
+    ).fetchall()
+
+    papers_payload: list[dict[str, Any]] = []
+    for row in paper_rows:
+        paper = row_to_paper(conn, row)
+        papers_payload.append(
+            {
+                'arxiv_id': paper['arxiv_id'],
+                'title': paper['title'],
+                'abstract': paper['abstract'],
+                'authors': paper['authors'],
+                'categories': paper['categories'],
+                'published_at': paper['published_at'],
+                'arxiv_url': paper['arxiv_url'],
+                'status': paper['status'],
+                'project': paper['project_name'],
+                'rating': paper['rating'],
+                'starred': paper['starred'],
+                'notes': paper['notes'] or '',
+                'tags': [tag['name'] for tag in paper['tags']],
+                'sort_order': paper['sort_order'],
+            }
+        )
+
+    conn.close()
+    return {
+        'version': 1,
+        'projects': [row['name'] for row in project_rows],
+        'tags': [row['name'] for row in tag_rows],
+        'papers': papers_payload,
+    }
+
+
+@app.post('/api/data/import')
+def import_data(payload: DataImportIn) -> dict[str, Any]:
+    conn = get_connection()
+
+    imported_count = 0
+    with conn:
+        for project_name in payload.projects:
+            normalized_project = (project_name or '').strip()
+            if normalized_project:
+                conn.execute('INSERT OR IGNORE INTO projects (name) VALUES (?)', (normalized_project,))
+
+        for tag_name in payload.tags:
+            normalized_tag = (tag_name or '').strip()
+            if normalized_tag:
+                conn.execute('INSERT OR IGNORE INTO tags (name) VALUES (?)', (normalized_tag,))
+
+        project_rows = conn.execute('SELECT id, name FROM projects').fetchall()
+        project_ids_by_name = {row['name']: row['id'] for row in project_rows}
+
+        for paper in payload.papers:
+            source_id = normalize_source_id(paper.arxiv_id)
+            project_name = (paper.project or '').strip()
+            project_id = project_ids_by_name.get(project_name) if project_name else None
+
+            meta = {
+                'arxiv_id': source_id,
+                'title': paper.title.strip(),
+                'abstract': paper.abstract or '',
+                'authors': [a for a in paper.authors if a],
+                'categories': [c for c in paper.categories if c],
+                'published_at': paper.published_at,
+                'arxiv_url': paper.arxiv_url,
+                'sort_order': paper.sort_order,
+            }
+            row = upsert_paper(conn, meta)
+
+            conn.execute(
+                '''
+                UPDATE papers
+                SET status = ?, project_id = ?, rating = ?, starred = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                ''',
+                (paper.status, project_id, paper.rating, int(paper.starred), paper.notes, row['id']),
+            )
+
+            for tag_name in paper.tags:
+                normalized_tag = (tag_name or '').strip()
+                if not normalized_tag:
+                    continue
+                conn.execute('INSERT OR IGNORE INTO tags (name) VALUES (?)', (normalized_tag,))
+                tag_row = conn.execute('SELECT id FROM tags WHERE name = ?', (normalized_tag,)).fetchone()
+                conn.execute('INSERT OR IGNORE INTO paper_tags (paper_id, tag_id) VALUES (?, ?)', (row['id'], tag_row['id']))
+
+            imported_count += 1
+
+    total_papers = conn.execute('SELECT COUNT(*) AS count FROM papers').fetchone()['count']
+    conn.close()
+
+    return {'ok': True, 'imported_papers': imported_count, 'total_papers': total_papers}
+
+
+@app.get('/')
 def root() -> FileResponse:
-    return FileResponse(WEB_DIR / "index.html")
+    return FileResponse(WEB_DIR / 'index.html')

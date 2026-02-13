@@ -34,3 +34,5 @@ Open http://127.0.0.1:8000.
 - `DELETE /api/papers/{id}/tags/{tag_id}`
 - `GET/POST /api/projects`
 - `GET/POST /api/tags`
+- `GET /api/data/export`
+- `POST /api/data/import`
