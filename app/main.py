@@ -4,7 +4,8 @@ import asyncio
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -13,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from app.db import get_connection, init_db
 from app.sources.arxiv import fetch_arxiv, normalize_arxiv_id, search_arxiv_by_author
+from app.sources.lesswrong import search_lesswrong
 from app.sources.registry import fetch_by_input, normalize_source_id
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -255,22 +257,20 @@ async def import_arxiv_batch(payload: ImportArxivBatchIn) -> list[dict[str, Any]
     return papers
 
 
-
-
 @app.post("/api/papers/import-from-search")
 def import_from_search(payload: ImportArxivSearchBatchIn) -> list[dict[str, Any]]:
     metas: list[dict[str, Any]] = []
     for paper in payload.papers:
-        arxiv_id = normalize_source_id(paper.arxiv_id)
+        source_id = normalize_source_id(paper.arxiv_id)
         metas.append(
             {
-                "arxiv_id": arxiv_id,
+                "arxiv_id": source_id,
                 "title": paper.title.strip(),
                 "abstract": paper.abstract or "",
                 "authors": [a for a in paper.authors if a],
                 "categories": [c for c in paper.categories if c],
                 "published_at": paper.published_at,
-                "arxiv_url": paper.arxiv_url or f"https://arxiv.org/abs/{arxiv_id}",
+                "arxiv_url": paper.arxiv_url,
             }
         )
 
@@ -283,9 +283,18 @@ def import_from_search(payload: ImportArxivSearchBatchIn) -> list[dict[str, Any]
     conn.close()
     return papers
 
-@app.get("/api/arxiv/search-by-author")
-async def arxiv_search_by_author(author: str = Query(min_length=2), max_results: int = Query(default=20, ge=1, le=50)) -> list[dict[str, Any]]:
-    results = await search_arxiv_by_author(author, max_results)
+
+@app.get("/api/search")
+async def search_sources(
+    q: str = Query(min_length=2),
+    source: Literal["arxiv", "lesswrong"] = Query(default="arxiv"),
+    max_results: int = Query(default=20, ge=1, le=50),
+) -> list[dict[str, Any]]:
+    if source == "lesswrong":
+        results = await search_lesswrong(q, max_results)
+    else:
+        results = await search_arxiv_by_author(q, max_results)
+
     conn = get_connection()
     existing_rows = conn.execute("SELECT arxiv_id FROM papers WHERE arxiv_id IS NOT NULL").fetchall()
     conn.close()
@@ -294,6 +303,15 @@ async def arxiv_search_by_author(author: str = Query(min_length=2), max_results:
     for item in results:
         item["already_added"] = item["arxiv_id"] in existing_ids
     return results
+
+
+@app.get("/api/arxiv/search-by-author")
+async def arxiv_search_by_author(
+    author: str = Query(min_length=2),
+    max_results: int = Query(default=20, ge=1, le=50),
+) -> list[dict[str, Any]]:
+    # Backward-compatible endpoint kept for existing clients.
+    return await search_sources(q=author, source="arxiv", max_results=max_results)
 
 
 @app.get("/api/papers")

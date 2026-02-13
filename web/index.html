@@ -48,11 +48,15 @@
       </section>
 
       <section class="discover">
-        <h2>Find papers by author</h2>
+        <h2>Search Sources</h2>
         <form id="author-search-form" class="author-form">
-          <input id="author-input" placeholder="e.g. Geoffrey Hinton" required />
+          <select id="search-source">
+            <option value="arxiv">arXiv</option>
+            <option value="lesswrong">LessWrong</option>
+          </select>
+          <input id="author-input" placeholder="Search text or author" required />
           <input id="author-max-results" type="number" min="1" max="50" value="12" />
-          <button id="author-search-btn" type="submit">Search arXiv</button>
+          <button id="author-search-btn" type="submit">Search</button>
           <button id="batch-add-btn" type="button">Add selected</button>
         </form>
         <div id="author-loading" class="throbber hidden" role="status" aria-live="polite">

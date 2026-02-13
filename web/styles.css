@@ -39,6 +39,7 @@ button:disabled { cursor: not-allowed; opacity: .7; }
 .import-form { display: flex; gap: .5rem; width: min(760px, 100%); }
 .author-form { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: .75rem; }
 .author-form #author-input { min-width: 260px; flex: 1; }
+#search-source { min-width: 140px; }
 .author-results { display: grid; gap: .45rem; }
 .author-row { display: grid; grid-template-columns: auto 1fr auto; gap: .5rem; align-items: start; background: white; border: 1px solid #dbe5ef; border-radius: 8px; padding: .5rem .6rem; }
 .author-title { font-weight: 600; }

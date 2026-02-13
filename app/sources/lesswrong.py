@@ -48,6 +48,19 @@ def _strip_html(html: str) -> str:
     return text.strip()
 
 
+async def _fetch_feed_root() -> ET.Element:
+    async with httpx.AsyncClient(timeout=LESSWRONG_TIMEOUT, headers=LESSWRONG_HEADERS) as client:
+        response = await client.get("https://www.lesswrong.com/feed.xml")
+
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail="Unable to reach LessWrong right now")
+
+    try:
+        return ET.fromstring(response.text)
+    except ET.ParseError as exc:
+        raise HTTPException(status_code=502, detail="Invalid response from LessWrong") from exc
+
+
 async def _fetch_from_json(post_id: str) -> dict[str, Any]:
     url = f"https://www.lesswrong.com/posts/{post_id}.json"
     async with httpx.AsyncClient(timeout=LESSWRONG_TIMEOUT, headers=LESSWRONG_HEADERS) as client:
@@ -95,17 +108,7 @@ async def _fetch_from_json(post_id: str) -> dict[str, Any]:
 
 
 async def _fetch_from_feed(post_id: str) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=LESSWRONG_TIMEOUT, headers=LESSWRONG_HEADERS) as client:
-        response = await client.get("https://www.lesswrong.com/feed.xml")
-
-    if response.status_code >= 400:
-        raise HTTPException(status_code=502, detail="Unable to reach LessWrong right now")
-
-    try:
-        root = ET.fromstring(response.text)
-    except ET.ParseError as exc:
-        raise HTTPException(status_code=502, detail="Invalid response from LessWrong") from exc
-
+    root = await _fetch_feed_root()
     ns = {"dc": "http://purl.org/dc/elements/1.1/"}
     for item in root.findall("./channel/item"):
         link = (item.findtext("link") or "").strip()
@@ -139,3 +142,45 @@ async def fetch_lesswrong(value: str) -> dict[str, Any]:
         if exc.status_code in {502, 429}:
             return await _fetch_from_feed(post_id)
         raise
+
+
+async def search_lesswrong(query: str, max_results: int = 20) -> list[dict[str, Any]]:
+    query_text = (query or "").strip().lower()
+    if len(query_text) < 2:
+        raise HTTPException(status_code=400, detail="Search query must be at least 2 characters")
+
+    root = await _fetch_feed_root()
+    ns = {"dc": "http://purl.org/dc/elements/1.1/"}
+
+    results: list[dict[str, Any]] = []
+    for item in root.findall("./channel/item"):
+        title = (item.findtext("title") or "").strip()
+        description_raw = item.findtext("description") or ""
+        description = _strip_html(description_raw)
+        author = (item.findtext("dc:creator", default="LessWrong", namespaces=ns) or "LessWrong").strip()
+        link = (item.findtext("link") or "").strip()
+
+        haystack = f"{title} {description} {author}".lower()
+        if query_text not in haystack:
+            continue
+
+        post_id = extract_lesswrong_post_id(link)
+        if not post_id:
+            continue
+
+        results.append(
+            {
+                "arxiv_id": f"lw:{post_id}",
+                "title": title or f"LessWrong post {post_id}",
+                "abstract": description or "(No summary available)",
+                "authors": [author],
+                "categories": ["lesswrong"],
+                "published_at": item.findtext("pubDate"),
+                "arxiv_url": link or f"https://www.lesswrong.com/posts/{post_id}",
+            }
+        )
+
+        if len(results) >= max_results:
+            break
+
+    return results

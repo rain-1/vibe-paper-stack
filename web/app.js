@@ -9,6 +9,7 @@ const authorResults = document.getElementById('author-results');
 const authorForm = document.getElementById('author-search-form');
 const authorInput = document.getElementById('author-input');
 const authorMaxResults = document.getElementById('author-max-results');
+const searchSource = document.getElementById('search-source');
 const authorSearchBtn = document.getElementById('author-search-btn');
 const authorLoading = document.getElementById('author-loading');
 const authorLoadingText = document.getElementById('author-loading-text');
@@ -86,6 +87,7 @@ function setAuthorLoading(isLoading, label = 'Searching arXiv...') {
   batchAddBtn.disabled = isLoading;
   authorInput.disabled = isLoading;
   authorMaxResults.disabled = isLoading;
+  searchSource.disabled = isLoading;
 }
 
 function renderAuthorMessage(message, isError = false) {
@@ -354,8 +356,8 @@ function renderAuthorResults() {
   }
 }
 
-async function searchByAuthor(author, maxResults) {
-  state.authorResults = await api(`/api/arxiv/search-by-author?author=${encodeURIComponent(author)}&max_results=${maxResults}`);
+async function searchBySource(source, query, maxResults) {
+  state.authorResults = await api(`/api/search?source=${encodeURIComponent(source)}&q=${encodeURIComponent(query)}&max_results=${maxResults}`);
   renderAuthorResults();
 }
 
@@ -435,13 +437,15 @@ document.getElementById('import-form').addEventListener('submit', async (event) 
 
 authorForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const author = authorInput.value.trim();
+  const query = authorInput.value.trim();
+  const source = searchSource.value || 'arxiv';
+  const sourceLabel = source === 'lesswrong' ? 'LessWrong' : 'arXiv';
   const maxResults = Number(authorMaxResults.value || 12);
-  if (!author) return;
-  setAuthorLoading(true, `Searching arXiv for ${author}...`);
+  if (!query) return;
+  setAuthorLoading(true, `Searching ${sourceLabel} for ${query}...`);
   setStatus(authorStatus);
   try {
-    await searchByAuthor(author, maxResults);
+    await searchBySource(source, query, maxResults);
   } catch (err) {
     state.authorResults = [];
     renderAuthorMessage(`Search failed: ${err.message}`, true);
