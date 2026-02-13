@@ -783,9 +783,14 @@ batchAddBtn.addEventListener('click', async () => {
 exportDataBtn.addEventListener('click', exportDataSnapshot);
 importDataBtn.addEventListener('click', importDataSnapshot);
 
-switchTab('tiles');
-await loadProjects();
-await loadTags();
-await loadProjectSummary();
-await loadPapers();
-renderAuthorResults();
+try {
+  switchTab('tiles');
+  await loadProjects();
+  await loadTags();
+  await loadProjectSummary();
+  await loadPapers();
+  renderAuthorResults();
+} catch (err) {
+  console.error('Initialization failed:', err);
+  setStatus(tilesStatus, `Failed to load: ${err.message}. Is the server running?`, 'error');
+}

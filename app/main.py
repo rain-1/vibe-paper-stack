@@ -4,6 +4,7 @@ import asyncio
 import os
 import json
 import sqlite3
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
@@ -13,7 +14,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app.db import get_connection, init_db
+from app.db import get_conn, init_db
 from app.sources.arxiv import fetch_arxiv, normalize_arxiv_id, search_arxiv_by_author
 from app.sources.lesswrong import search_lesswrong
 from app.sources.registry import fetch_by_input, normalize_source_id
@@ -22,9 +23,16 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 BATCH_IMPORT_REQUEST_SPACING_SECONDS = 0.8
 MAX_TAG_LOOKUP_BATCH = 500
+DEFAULT_PAGE_LIMIT = 100
+PATCH_ALLOWED_FIELDS = {"status", "project_id", "rating", "starred", "notes"}
 DEFAULT_ALLOWED_ORIGINS = ["http://127.0.0.1:8000", "http://localhost:8000"]
 _ALLOWED_ORIGINS_RAW = os.getenv("VIBE_ALLOWED_ORIGINS", "")
 ALLOWED_ORIGINS = [origin.strip() for origin in _ALLOWED_ORIGINS_RAW.split(",") if origin.strip()] or DEFAULT_ALLOWED_ORIGINS
+
+
+def _escape_like(value: str) -> str:
+    """Escape special LIKE characters so they match literally."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 class ProjectIn(BaseModel):
@@ -97,7 +105,13 @@ class DataImportIn(BaseModel):
     papers: list[DataPaperIn] = Field(default_factory=list)
 
 
-app = FastAPI(title="Vibe Paper Stack")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="Vibe Paper Stack", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -207,11 +221,6 @@ def upsert_paper(conn: sqlite3.Connection, meta: dict[str, Any]) -> sqlite3.Row:
     ).fetchone()
 
 
-@app.on_event("startup")
-def startup() -> None:
-    init_db()
-
-
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -219,45 +228,42 @@ def health() -> dict[str, str]:
 
 @app.get("/api/projects")
 def get_projects() -> list[dict[str, Any]]:
-    conn = get_connection()
-    rows = conn.execute("SELECT id, name, created_at FROM projects ORDER BY name COLLATE NOCASE").fetchall()
-    conn.close()
+    with get_conn() as conn:
+        rows = conn.execute("SELECT id, name, created_at FROM projects ORDER BY name COLLATE NOCASE").fetchall()
     return [dict(row) for row in rows]
 
 
 
 @app.get('/api/projects/summary')
 def get_projects_summary(include_done: bool = True) -> dict[str, Any]:
-    conn = get_connection()
+    with get_conn() as conn:
+        include_done_int = 1 if include_done else 0
+        project_rows = conn.execute(
+            '''
+            SELECT
+                pr.id,
+                pr.name,
+                COUNT(p.id) AS total,
+                SUM(CASE WHEN p.status = 'queued' THEN 1 ELSE 0 END) AS queued,
+                SUM(CASE WHEN p.status = 'reading' THEN 1 ELSE 0 END) AS reading,
+                SUM(CASE WHEN p.status = 'done' THEN 1 ELSE 0 END) AS done
+            FROM projects pr
+            LEFT JOIN papers p ON p.project_id = pr.id AND (? = 1 OR p.status != 'done')
+            GROUP BY pr.id, pr.name
+            ORDER BY pr.name COLLATE NOCASE
+            ''',
+            (include_done_int,),
+        ).fetchall()
 
-    include_done_int = 1 if include_done else 0
-    project_rows = conn.execute(
-        '''
-        SELECT
-            pr.id,
-            pr.name,
-            COUNT(p.id) AS total,
-            SUM(CASE WHEN p.status = 'queued' THEN 1 ELSE 0 END) AS queued,
-            SUM(CASE WHEN p.status = 'reading' THEN 1 ELSE 0 END) AS reading,
-            SUM(CASE WHEN p.status = 'done' THEN 1 ELSE 0 END) AS done
-        FROM projects pr
-        LEFT JOIN papers p ON p.project_id = pr.id AND (? = 1 OR p.status != 'done')
-        GROUP BY pr.id, pr.name
-        ORDER BY pr.name COLLATE NOCASE
-        ''',
-        (include_done_int,),
-    ).fetchall()
+        unassigned = conn.execute(
+            '''
+            SELECT COUNT(*) AS count
+            FROM papers
+            WHERE project_id IS NULL AND (? = 1 OR status != 'done')
+            ''',
+            (include_done_int,),
+        ).fetchone()['count']
 
-    unassigned = conn.execute(
-        '''
-        SELECT COUNT(*) AS count
-        FROM papers
-        WHERE project_id IS NULL AND (? = 1 OR status != 'done')
-        ''',
-        (include_done_int,),
-    ).fetchone()['count']
-
-    conn.close()
     return {
         'projects': [dict(row) for row in project_rows],
         'unassigned_count': unassigned,
@@ -265,38 +271,33 @@ def get_projects_summary(include_done: bool = True) -> dict[str, Any]:
 
 @app.post("/api/projects")
 def create_project(payload: ProjectIn) -> dict[str, Any]:
-    conn = get_connection()
-    try:
-        with conn:
-            cursor = conn.execute("INSERT INTO projects (name) VALUES (?)", (payload.name.strip(),))
-        row = conn.execute("SELECT id, name, created_at FROM projects WHERE id = ?", (cursor.lastrowid,)).fetchone()
-        return dict(row)
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=409, detail="Project already exists")
-    finally:
-        conn.close()
+    with get_conn() as conn:
+        try:
+            with conn:
+                cursor = conn.execute("INSERT INTO projects (name) VALUES (?)", (payload.name.strip(),))
+            row = conn.execute("SELECT id, name, created_at FROM projects WHERE id = ?", (cursor.lastrowid,)).fetchone()
+            return dict(row)
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail="Project already exists")
 
 
 @app.get("/api/tags")
 def get_tags() -> list[dict[str, Any]]:
-    conn = get_connection()
-    rows = conn.execute("SELECT id, name, created_at FROM tags ORDER BY name COLLATE NOCASE").fetchall()
-    conn.close()
+    with get_conn() as conn:
+        rows = conn.execute("SELECT id, name, created_at FROM tags ORDER BY name COLLATE NOCASE").fetchall()
     return [dict(row) for row in rows]
 
 
 @app.post("/api/tags")
 def create_tag(payload: TagIn) -> dict[str, Any]:
-    conn = get_connection()
-    try:
-        with conn:
-            cursor = conn.execute("INSERT INTO tags (name) VALUES (?)", (payload.name.strip(),))
-        row = conn.execute("SELECT id, name, created_at FROM tags WHERE id = ?", (cursor.lastrowid,)).fetchone()
-        return dict(row)
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=409, detail="Tag already exists")
-    finally:
-        conn.close()
+    with get_conn() as conn:
+        try:
+            with conn:
+                cursor = conn.execute("INSERT INTO tags (name) VALUES (?)", (payload.name.strip(),))
+            row = conn.execute("SELECT id, name, created_at FROM tags WHERE id = ?", (cursor.lastrowid,)).fetchone()
+            return dict(row)
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail="Tag already exists")
 
 
 @app.post("/api/papers/import-arxiv")
@@ -304,11 +305,10 @@ async def import_arxiv(payload: ImportArxivIn) -> dict[str, Any]:
     arxiv_id = normalize_arxiv_id(payload.value)
     meta = await fetch_arxiv(arxiv_id)
 
-    conn = get_connection()
-    with conn:
-        row = upsert_paper(conn, meta)
-    paper = row_to_paper(conn, row)
-    conn.close()
+    with get_conn() as conn:
+        with conn:
+            row = upsert_paper(conn, meta)
+        paper = row_to_paper(conn, row)
     return paper
 
 
@@ -316,11 +316,10 @@ async def import_arxiv(payload: ImportArxivIn) -> dict[str, Any]:
 async def import_source(payload: ImportSourceIn) -> dict[str, Any]:
     meta = await fetch_by_input(payload.value)
 
-    conn = get_connection()
-    with conn:
-        row = upsert_paper(conn, meta)
-    paper = row_to_paper(conn, row)
-    conn.close()
+    with get_conn() as conn:
+        with conn:
+            row = upsert_paper(conn, meta)
+        paper = row_to_paper(conn, row)
     return paper
 
 
@@ -339,15 +338,14 @@ async def import_arxiv_batch(payload: ImportArxivBatchIn) -> list[dict[str, Any]
             # arXiv rejects bursty request patterns; small spacing avoids 429 for batch add.
             await asyncio.sleep(BATCH_IMPORT_REQUEST_SPACING_SECONDS)
 
-    conn = get_connection()
-    rows: list[sqlite3.Row] = []
-    with conn:
-        for meta in metas:
-            rows.append(upsert_paper(conn, meta))
+    with get_conn() as conn:
+        rows: list[sqlite3.Row] = []
+        with conn:
+            for meta in metas:
+                rows.append(upsert_paper(conn, meta))
 
-    tags_by_paper_id = build_tags_by_paper_id(conn, [row["id"] for row in rows])
-    papers = [row_to_paper(conn, row, tags_by_paper_id) for row in rows]
-    conn.close()
+        tags_by_paper_id = build_tags_by_paper_id(conn, [row["id"] for row in rows])
+        papers = [row_to_paper(conn, row, tags_by_paper_id) for row in rows]
     return papers
 
 
@@ -368,15 +366,14 @@ def import_from_search(payload: ImportArxivSearchBatchIn) -> list[dict[str, Any]
             }
         )
 
-    conn = get_connection()
-    rows: list[sqlite3.Row] = []
-    with conn:
-        for meta in metas:
-            rows.append(upsert_paper(conn, meta))
+    with get_conn() as conn:
+        rows: list[sqlite3.Row] = []
+        with conn:
+            for meta in metas:
+                rows.append(upsert_paper(conn, meta))
 
-    tags_by_paper_id = build_tags_by_paper_id(conn, [row["id"] for row in rows])
-    papers = [row_to_paper(conn, row, tags_by_paper_id) for row in rows]
-    conn.close()
+        tags_by_paper_id = build_tags_by_paper_id(conn, [row["id"] for row in rows])
+        papers = [row_to_paper(conn, row, tags_by_paper_id) for row in rows]
     return papers
 
 
@@ -391,9 +388,8 @@ async def search_sources(
     else:
         results = await search_arxiv_by_author(q, max_results)
 
-    conn = get_connection()
-    existing_rows = conn.execute("SELECT arxiv_id FROM papers WHERE arxiv_id IS NOT NULL").fetchall()
-    conn.close()
+    with get_conn() as conn:
+        existing_rows = conn.execute("SELECT arxiv_id FROM papers WHERE arxiv_id IS NOT NULL").fetchall()
     existing_ids = {row["arxiv_id"] for row in existing_rows}
 
     for item in results:
@@ -420,57 +416,60 @@ def list_papers(
     starred: bool | None = None,
     rating_min: int | None = Query(default=None, ge=1, le=5),
     include_done: bool = False,
+    limit: int = Query(default=DEFAULT_PAGE_LIMIT, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
 ) -> list[dict[str, Any]]:
-    conn = get_connection()
-    clauses: list[str] = []
-    params: list[Any] = []
+    with get_conn() as conn:
+        clauses: list[str] = []
+        params: list[Any] = []
 
-    if not include_done:
-        clauses.append("p.status != 'done'")
-    if status:
-        clauses.append("p.status = ?")
-        params.append(status)
-    if project_none:
-        clauses.append("p.project_id IS NULL")
-    elif project_id:
-        clauses.append("p.project_id = ?")
-        params.append(project_id)
-    if starred is not None:
-        clauses.append("p.starred = ?")
-        params.append(int(starred))
-    if rating_min is not None:
-        clauses.append("COALESCE(p.rating, 0) >= ?")
-        params.append(rating_min)
-    if q:
-        like = f"%{q}%"
-        tag_like = f"%{q.lstrip('#')}%"
-        clauses.append(
-            "("
-            "p.title LIKE ? OR p.abstract LIKE ? OR p.authors_json LIKE ? OR "
-            "EXISTS (SELECT 1 FROM paper_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.paper_id = p.id AND (t.name LIKE ? OR t.name LIKE ?))"
-            ")"
-        )
-        params.extend([like, like, like, like, tag_like])
-    if tag:
-        clauses.append(
-            "EXISTS (SELECT 1 FROM paper_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.paper_id = p.id AND t.name = ?)"
-        )
-        params.append(tag)
+        if not include_done:
+            clauses.append("p.status != 'done'")
+        if status:
+            clauses.append("p.status = ?")
+            params.append(status)
+        if project_none:
+            clauses.append("p.project_id IS NULL")
+        elif project_id:
+            clauses.append("p.project_id = ?")
+            params.append(project_id)
+        if starred is not None:
+            clauses.append("p.starred = ?")
+            params.append(int(starred))
+        if rating_min is not None:
+            clauses.append("COALESCE(p.rating, 0) >= ?")
+            params.append(rating_min)
+        if q:
+            escaped = _escape_like(q)
+            like = f"%{escaped}%"
+            tag_like = f"%{_escape_like(q.lstrip('#'))}%"
+            clauses.append(
+                "("
+                "p.title LIKE ? ESCAPE '\\' OR p.abstract LIKE ? ESCAPE '\\' OR p.authors_json LIKE ? ESCAPE '\\' OR "
+                "EXISTS (SELECT 1 FROM paper_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.paper_id = p.id AND (t.name LIKE ? ESCAPE '\\' OR t.name LIKE ? ESCAPE '\\'))"
+                ")"
+            )
+            params.extend([like, like, like, like, tag_like])
+        if tag:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM paper_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.paper_id = p.id AND t.name = ?)"
+            )
+            params.append(tag)
 
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    rows = conn.execute(
-        f"""
-        SELECT p.*, pr.name AS project_name
-        FROM papers p
-        LEFT JOIN projects pr ON pr.id = p.project_id
-        {where}
-        ORDER BY p.starred DESC, COALESCE(p.sort_order, 2147483647) ASC, p.created_at DESC
-        """,
-        params,
-    ).fetchall()
-    tags_by_paper_id = build_tags_by_paper_id(conn, [row["id"] for row in rows])
-    data = [row_to_paper(conn, row, tags_by_paper_id) for row in rows]
-    conn.close()
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = conn.execute(
+            f"""
+            SELECT p.*, pr.name AS project_name
+            FROM papers p
+            LEFT JOIN projects pr ON pr.id = p.project_id
+            {where}
+            ORDER BY p.starred DESC, COALESCE(p.sort_order, 2147483647) ASC, p.created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            [*params, limit, offset],
+        ).fetchall()
+        tags_by_paper_id = build_tags_by_paper_id(conn, [row["id"] for row in rows])
+        data = [row_to_paper(conn, row, tags_by_paper_id) for row in rows]
     return data
 
 
@@ -482,21 +481,19 @@ def reorder_papers(payload: PaperReorderIn) -> dict[str, bool]:
 
     placeholders = ",".join(["?"] * len(paper_ids))
 
-    conn = get_connection()
-    rows = conn.execute(f"SELECT id, sort_order FROM papers WHERE id IN ({placeholders})", paper_ids).fetchall()
-    if len(rows) != len(paper_ids):
-        conn.close()
-        raise HTTPException(status_code=404, detail="One or more papers were not found")
+    with get_conn() as conn:
+        rows = conn.execute(f"SELECT id, sort_order FROM papers WHERE id IN ({placeholders})", paper_ids).fetchall()
+        if len(rows) != len(paper_ids):
+            raise HTTPException(status_code=404, detail="One or more papers were not found")
 
-    min_sort_order = min((row["sort_order"] for row in rows if row["sort_order"] is not None), default=1)
+        min_sort_order = min((row["sort_order"] for row in rows if row["sort_order"] is not None), default=1)
 
-    with conn:
-        for index, paper_id in enumerate(paper_ids):
-            conn.execute(
-                "UPDATE papers SET sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (min_sort_order + index, paper_id),
-            )
-    conn.close()
+        with conn:
+            for index, paper_id in enumerate(paper_ids):
+                conn.execute(
+                    "UPDATE papers SET sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (min_sort_order + index, paper_id),
+                )
     return {"ok": True}
 
 
@@ -506,116 +503,131 @@ def patch_paper(paper_id: int, payload: PaperPatchIn) -> dict[str, Any]:
     if 'status' in updates and updates['status'] not in {'queued', 'reading', 'done'}:
         raise HTTPException(status_code=400, detail='Invalid status')
 
-    conn = get_connection()
-    row = conn.execute('SELECT id FROM papers WHERE id = ?', (paper_id,)).fetchone()
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail='Paper not found')
+    with get_conn() as conn:
+        row = conn.execute('SELECT id FROM papers WHERE id = ?', (paper_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail='Paper not found')
 
-    if 'project_id' in updates and updates['project_id'] is not None:
-        project_row = conn.execute('SELECT id FROM projects WHERE id = ?', (updates['project_id'],)).fetchone()
-        if not project_row:
-            conn.close()
-            raise HTTPException(status_code=400, detail='Invalid project_id')
+        if 'project_id' in updates and updates['project_id'] is not None:
+            project_row = conn.execute('SELECT id FROM projects WHERE id = ?', (updates['project_id'],)).fetchone()
+            if not project_row:
+                raise HTTPException(status_code=400, detail='Invalid project_id')
 
-    if updates:
-        sets = []
-        params: list[Any] = []
-        for key, value in updates.items():
-            sets.append(f'{key} = ?')
-            params.append(int(value) if key == 'starred' else value)
-        sets.append('updated_at = CURRENT_TIMESTAMP')
-        params.append(paper_id)
-        try:
-            with conn:
-                conn.execute(f"UPDATE papers SET {', '.join(sets)} WHERE id = ?", params)
-        except sqlite3.IntegrityError as exc:
-            conn.close()
-            raise HTTPException(status_code=400, detail='Invalid paper update payload') from exc
+        if updates:
+            sets = []
+            params: list[Any] = []
+            for key, value in updates.items():
+                if key not in PATCH_ALLOWED_FIELDS:
+                    raise HTTPException(status_code=400, detail=f'Unknown field: {key}')
+                sets.append(f'{key} = ?')
+                params.append(int(value) if key == 'starred' else value)
+            sets.append('updated_at = CURRENT_TIMESTAMP')
+            params.append(paper_id)
+            try:
+                with conn:
+                    conn.execute(f"UPDATE papers SET {', '.join(sets)} WHERE id = ?", params)
+            except sqlite3.IntegrityError as exc:
+                raise HTTPException(status_code=400, detail='Invalid paper update payload') from exc
 
-    full_row = conn.execute(
-        '''
-        SELECT p.*, pr.name AS project_name
-        FROM papers p
-        LEFT JOIN projects pr ON pr.id = p.project_id
-        WHERE p.id = ?
-        ''',
-        (paper_id,),
-    ).fetchone()
-    result = row_to_paper(conn, full_row)
-    conn.close()
+        full_row = conn.execute(
+            '''
+            SELECT p.*, pr.name AS project_name
+            FROM papers p
+            LEFT JOIN projects pr ON pr.id = p.project_id
+            WHERE p.id = ?
+            ''',
+            (paper_id,),
+        ).fetchone()
+        result = row_to_paper(conn, full_row)
     return result
 
 
 @app.post('/api/papers/{paper_id}/tags')
 def add_paper_tag(paper_id: int, payload: TagIn) -> dict[str, Any]:
-    conn = get_connection()
-    paper = conn.execute('SELECT id FROM papers WHERE id = ?', (paper_id,)).fetchone()
-    if not paper:
-        conn.close()
-        raise HTTPException(status_code=404, detail='Paper not found')
+    with get_conn() as conn:
+        paper = conn.execute('SELECT id FROM papers WHERE id = ?', (paper_id,)).fetchone()
+        if not paper:
+            raise HTTPException(status_code=404, detail='Paper not found')
 
-    with conn:
-        conn.execute('INSERT OR IGNORE INTO tags (name) VALUES (?)', (payload.name.strip(),))
-        tag = conn.execute('SELECT id, name FROM tags WHERE name = ?', (payload.name.strip(),)).fetchone()
-        conn.execute('INSERT OR IGNORE INTO paper_tags (paper_id, tag_id) VALUES (?, ?)', (paper_id, tag['id']))
+        with conn:
+            conn.execute('INSERT OR IGNORE INTO tags (name) VALUES (?)', (payload.name.strip(),))
+            tag = conn.execute('SELECT id, name FROM tags WHERE name = ?', (payload.name.strip(),)).fetchone()
+            conn.execute('INSERT OR IGNORE INTO paper_tags (paper_id, tag_id) VALUES (?, ?)', (paper_id, tag['id']))
 
-    conn.close()
     return {'paper_id': paper_id, 'tag': dict(tag)}
 
 
 @app.delete('/api/papers/{paper_id}/tags/{tag_id}')
 def remove_paper_tag(paper_id: int, tag_id: int) -> dict[str, Any]:
-    conn = get_connection()
-    with conn:
-        conn.execute('DELETE FROM paper_tags WHERE paper_id = ? AND tag_id = ?', (paper_id, tag_id))
-    conn.close()
+    with get_conn() as conn:
+        with conn:
+            conn.execute('DELETE FROM paper_tags WHERE paper_id = ? AND tag_id = ?', (paper_id, tag_id))
     return {'ok': True}
 
 
 
 
 
+@app.delete('/api/papers/{paper_id}')
+def delete_paper(paper_id: int) -> dict[str, bool]:
+    with get_conn() as conn:
+        row = conn.execute('SELECT id FROM papers WHERE id = ?', (paper_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail='Paper not found')
+        with conn:
+            conn.execute('DELETE FROM papers WHERE id = ?', (paper_id,))
+    return {'ok': True}
+
+
+@app.delete('/api/projects/{project_id}')
+def delete_project(project_id: int) -> dict[str, bool]:
+    with get_conn() as conn:
+        row = conn.execute('SELECT id FROM projects WHERE id = ?', (project_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail='Project not found')
+        with conn:
+            conn.execute('DELETE FROM projects WHERE id = ?', (project_id,))
+    return {'ok': True}
+
+
 @app.get('/api/data/export')
 def export_data() -> dict[str, Any]:
-    conn = get_connection()
+    with get_conn() as conn:
+        project_rows = conn.execute('SELECT name FROM projects ORDER BY name COLLATE NOCASE').fetchall()
+        tag_rows = conn.execute('SELECT name FROM tags ORDER BY name COLLATE NOCASE').fetchall()
+        paper_rows = conn.execute(
+            '''
+            SELECT p.*, pr.name AS project_name
+            FROM papers p
+            LEFT JOIN projects pr ON pr.id = p.project_id
+            ORDER BY COALESCE(p.sort_order, 2147483647) ASC, p.created_at DESC
+            '''
+        ).fetchall()
 
-    project_rows = conn.execute('SELECT name FROM projects ORDER BY name COLLATE NOCASE').fetchall()
-    tag_rows = conn.execute('SELECT name FROM tags ORDER BY name COLLATE NOCASE').fetchall()
-    paper_rows = conn.execute(
-        '''
-        SELECT p.*, pr.name AS project_name
-        FROM papers p
-        LEFT JOIN projects pr ON pr.id = p.project_id
-        ORDER BY COALESCE(p.sort_order, 2147483647) ASC, p.created_at DESC
-        '''
-    ).fetchall()
+        tags_by_paper_id = build_tags_by_paper_id(conn, [row["id"] for row in paper_rows])
 
-    tags_by_paper_id = build_tags_by_paper_id(conn, [row["id"] for row in paper_rows])
+        papers_payload: list[dict[str, Any]] = []
+        for row in paper_rows:
+            paper = row_to_paper(conn, row, tags_by_paper_id)
+            papers_payload.append(
+                {
+                    'arxiv_id': paper['arxiv_id'],
+                    'title': paper['title'],
+                    'abstract': paper['abstract'],
+                    'authors': paper['authors'],
+                    'categories': paper['categories'],
+                    'published_at': paper['published_at'],
+                    'arxiv_url': paper['arxiv_url'],
+                    'status': paper['status'],
+                    'project': paper['project_name'],
+                    'rating': paper['rating'],
+                    'starred': paper['starred'],
+                    'notes': paper['notes'] or '',
+                    'tags': [tag['name'] for tag in paper['tags']],
+                    'sort_order': paper['sort_order'],
+                }
+            )
 
-    papers_payload: list[dict[str, Any]] = []
-    for row in paper_rows:
-        paper = row_to_paper(conn, row, tags_by_paper_id)
-        papers_payload.append(
-            {
-                'arxiv_id': paper['arxiv_id'],
-                'title': paper['title'],
-                'abstract': paper['abstract'],
-                'authors': paper['authors'],
-                'categories': paper['categories'],
-                'published_at': paper['published_at'],
-                'arxiv_url': paper['arxiv_url'],
-                'status': paper['status'],
-                'project': paper['project_name'],
-                'rating': paper['rating'],
-                'starred': paper['starred'],
-                'notes': paper['notes'] or '',
-                'tags': [tag['name'] for tag in paper['tags']],
-                'sort_order': paper['sort_order'],
-            }
-        )
-
-    conn.close()
     return {
         'version': 1,
         'projects': [row['name'] for row in project_rows],
@@ -626,61 +638,59 @@ def export_data() -> dict[str, Any]:
 
 @app.post('/api/data/import')
 def import_data(payload: DataImportIn) -> dict[str, Any]:
-    conn = get_connection()
+    with get_conn() as conn:
+        imported_count = 0
+        with conn:
+            for project_name in payload.projects:
+                normalized_project = (project_name or '').strip()
+                if normalized_project:
+                    conn.execute('INSERT OR IGNORE INTO projects (name) VALUES (?)', (normalized_project,))
 
-    imported_count = 0
-    with conn:
-        for project_name in payload.projects:
-            normalized_project = (project_name or '').strip()
-            if normalized_project:
-                conn.execute('INSERT OR IGNORE INTO projects (name) VALUES (?)', (normalized_project,))
-
-        for tag_name in payload.tags:
-            normalized_tag = (tag_name or '').strip()
-            if normalized_tag:
-                conn.execute('INSERT OR IGNORE INTO tags (name) VALUES (?)', (normalized_tag,))
-
-        project_rows = conn.execute('SELECT id, name FROM projects').fetchall()
-        project_ids_by_name = {row['name']: row['id'] for row in project_rows}
-
-        for paper in payload.papers:
-            source_id = normalize_source_id(paper.arxiv_id)
-            project_name = (paper.project or '').strip()
-            project_id = project_ids_by_name.get(project_name) if project_name else None
-
-            meta = {
-                'arxiv_id': source_id,
-                'title': paper.title.strip(),
-                'abstract': paper.abstract or '',
-                'authors': [a for a in paper.authors if a],
-                'categories': [c for c in paper.categories if c],
-                'published_at': paper.published_at,
-                'arxiv_url': paper.arxiv_url,
-                'sort_order': paper.sort_order,
-            }
-            row = upsert_paper(conn, meta)
-
-            conn.execute(
-                '''
-                UPDATE papers
-                SET status = ?, project_id = ?, rating = ?, starred = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                ''',
-                (paper.status, project_id, paper.rating, int(paper.starred), paper.notes, row['id']),
-            )
-
-            for tag_name in paper.tags:
+            for tag_name in payload.tags:
                 normalized_tag = (tag_name or '').strip()
-                if not normalized_tag:
-                    continue
-                conn.execute('INSERT OR IGNORE INTO tags (name) VALUES (?)', (normalized_tag,))
-                tag_row = conn.execute('SELECT id FROM tags WHERE name = ?', (normalized_tag,)).fetchone()
-                conn.execute('INSERT OR IGNORE INTO paper_tags (paper_id, tag_id) VALUES (?, ?)', (row['id'], tag_row['id']))
+                if normalized_tag:
+                    conn.execute('INSERT OR IGNORE INTO tags (name) VALUES (?)', (normalized_tag,))
 
-            imported_count += 1
+            project_rows = conn.execute('SELECT id, name FROM projects').fetchall()
+            project_ids_by_name = {row['name']: row['id'] for row in project_rows}
 
-    total_papers = conn.execute('SELECT COUNT(*) AS count FROM papers').fetchone()['count']
-    conn.close()
+            for paper in payload.papers:
+                source_id = normalize_source_id(paper.arxiv_id)
+                project_name = (paper.project or '').strip()
+                project_id = project_ids_by_name.get(project_name) if project_name else None
+
+                meta = {
+                    'arxiv_id': source_id,
+                    'title': paper.title.strip(),
+                    'abstract': paper.abstract or '',
+                    'authors': [a for a in paper.authors if a],
+                    'categories': [c for c in paper.categories if c],
+                    'published_at': paper.published_at,
+                    'arxiv_url': paper.arxiv_url,
+                    'sort_order': paper.sort_order,
+                }
+                row = upsert_paper(conn, meta)
+
+                conn.execute(
+                    '''
+                    UPDATE papers
+                    SET status = ?, project_id = ?, rating = ?, starred = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    ''',
+                    (paper.status, project_id, paper.rating, int(paper.starred), paper.notes, row['id']),
+                )
+
+                for tag_name in paper.tags:
+                    normalized_tag = (tag_name or '').strip()
+                    if not normalized_tag:
+                        continue
+                    conn.execute('INSERT OR IGNORE INTO tags (name) VALUES (?)', (normalized_tag,))
+                    tag_row = conn.execute('SELECT id FROM tags WHERE name = ?', (normalized_tag,)).fetchone()
+                    conn.execute('INSERT OR IGNORE INTO paper_tags (paper_id, tag_id) VALUES (?, ?)', (row['id'], tag_row['id']))
+
+                imported_count += 1
+
+        total_papers = conn.execute('SELECT COUNT(*) AS count FROM papers').fetchone()['count']
 
     return {'ok': True, 'imported_papers': imported_count, 'total_papers': total_papers}
 

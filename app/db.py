@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Generator
 
 DB_PATH = Path(__file__).resolve().parent.parent / "papers.db"
 
@@ -11,6 +13,15 @@ def get_connection() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+@contextmanager
+def get_conn() -> Generator[sqlite3.Connection, None, None]:
+    conn = get_connection()
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def init_db() -> None:
