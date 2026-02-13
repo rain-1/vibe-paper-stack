@@ -62,4 +62,14 @@ def init_db() -> None:
             INSERT OR IGNORE INTO projects (name) VALUES ('Main');
             """
         )
+
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(papers)").fetchall()}
+        if "sort_order" not in columns:
+            conn.execute("ALTER TABLE papers ADD COLUMN sort_order INTEGER")
+
+            rows = conn.execute("SELECT id FROM papers ORDER BY created_at, id").fetchall()
+            for index, row in enumerate(rows, start=1):
+                conn.execute("UPDATE papers SET sort_order = ? WHERE id = ?", (index, row["id"]))
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_sort_order ON papers(sort_order)")
     conn.close()

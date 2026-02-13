@@ -6,7 +6,24 @@ const searchInput = document.getElementById('search-input');
 const hideDone = document.getElementById('hide-done');
 const authorResults = document.getElementById('author-results');
 
-const state = { papers: [], projects: [], authorResults: [] };
+const authorForm = document.getElementById('author-search-form');
+const authorInput = document.getElementById('author-input');
+const authorMaxResults = document.getElementById('author-max-results');
+const authorSearchBtn = document.getElementById('author-search-btn');
+const authorLoading = document.getElementById('author-loading');
+const authorLoadingText = document.getElementById('author-loading-text');
+const batchAddBtn = document.getElementById('batch-add-btn');
+const importSubmitBtn = document.getElementById('import-submit-btn');
+const importStatus = document.getElementById('import-status');
+const authorStatus = document.getElementById('author-status');
+const tilesStatus = document.getElementById('tiles-status');
+
+const tabTilesBtn = document.getElementById('tab-tiles-btn');
+const tabSearchBtn = document.getElementById('tab-search-btn');
+const tabTiles = document.getElementById('tab-tiles');
+const tabSearch = document.getElementById('tab-search');
+
+const state = { papers: [], projects: [], authorResults: [], draggingPaperId: null, activeTab: 'tiles' };
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -21,6 +38,28 @@ async function api(path, options = {}) {
   return res.json();
 }
 
+function setStatus(target, message = '', type = '') {
+  if (!message) {
+    target.classList.add('hidden');
+    target.classList.remove('error', 'success');
+    target.textContent = '';
+    return;
+  }
+  target.textContent = message;
+  target.classList.remove('hidden', 'error', 'success');
+  if (type) target.classList.add(type);
+}
+
+function switchTab(tabName) {
+  state.activeTab = tabName;
+  const showTiles = tabName === 'tiles';
+
+  tabTiles.classList.toggle('hidden', !showTiles);
+  tabSearch.classList.toggle('hidden', showTiles);
+  tabTilesBtn.classList.toggle('active', showTiles);
+  tabSearchBtn.classList.toggle('active', !showTiles);
+}
+
 function buildQuery() {
   const params = new URLSearchParams();
   if (searchInput.value.trim()) params.set('q', searchInput.value.trim());
@@ -28,6 +67,58 @@ function buildQuery() {
   if (projectFilter.value) params.set('project_id', projectFilter.value);
   params.set('include_done', hideDone.checked ? 'false' : 'true');
   return params.toString();
+}
+
+function setAuthorLoading(isLoading, label = 'Searching arXiv...') {
+  authorLoading.classList.toggle('hidden', !isLoading);
+  authorLoadingText.textContent = label;
+  authorSearchBtn.disabled = isLoading;
+  batchAddBtn.disabled = isLoading;
+  authorInput.disabled = isLoading;
+  authorMaxResults.disabled = isLoading;
+}
+
+function renderAuthorMessage(message, isError = false) {
+  authorResults.innerHTML = '';
+  const msg = document.createElement('div');
+  msg.className = `author-message${isError ? ' error' : ''}`;
+  msg.textContent = message;
+  authorResults.append(msg);
+}
+
+function clearDragClasses() {
+  for (const card of papersEl.querySelectorAll('.card')) {
+    card.classList.remove('dragging', 'drop-target');
+  }
+}
+
+async function persistPaperOrder() {
+  await api('/api/papers/reorder', {
+    method: 'POST',
+    body: JSON.stringify({ paper_ids: state.papers.map((paper) => paper.id) }),
+  });
+}
+
+async function movePaper(fromPaperId, toPaperId) {
+  if (!fromPaperId || !toPaperId || fromPaperId === toPaperId) return;
+
+  const fromIndex = state.papers.findIndex((paper) => paper.id === fromPaperId);
+  const toIndex = state.papers.findIndex((paper) => paper.id === toPaperId);
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+
+  const original = [...state.papers];
+  const [movedPaper] = state.papers.splice(fromIndex, 1);
+  state.papers.splice(toIndex, 0, movedPaper);
+  render();
+
+  try {
+    await persistPaperOrder();
+    setStatus(tilesStatus, 'Saved new card order.', 'success');
+  } catch (err) {
+    state.papers = original;
+    render();
+    setStatus(tilesStatus, `Reorder failed: ${err.message}`, 'error');
+  }
 }
 
 async function loadProjects() {
@@ -51,10 +142,73 @@ function render() {
   papersEl.innerHTML = '';
   for (const paper of state.papers) {
     const node = template.content.firstElementChild.cloneNode(true);
+    const dragHandle = node.querySelector('.drag-handle');
+    node.dataset.paperId = String(paper.id);
+    node.draggable = true;
+
     node.querySelector('.title').textContent = paper.title;
     node.querySelector('.title').title = paper.title;
     node.querySelector('.meta').textContent = metaLine(paper);
-    node.querySelector('.abstract').textContent = paper.abstract;
+
+    const abstractEl = node.querySelector('.abstract');
+    const abstractToggle = node.querySelector('.abstract-toggle');
+    abstractEl.textContent = paper.abstract;
+
+    const needsAbstractToggle = (paper.abstract || '').length > 360;
+    if (needsAbstractToggle) {
+      abstractToggle.classList.remove('hidden');
+      abstractToggle.textContent = 'Show more';
+      abstractToggle.setAttribute('aria-expanded', 'false');
+      abstractToggle.addEventListener('click', () => {
+        const expanded = abstractEl.classList.toggle('expanded');
+        abstractToggle.textContent = expanded ? 'Show less' : 'Show more';
+        abstractToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      });
+    } else {
+      abstractToggle.classList.add('hidden');
+      abstractEl.classList.remove('expanded');
+    }
+
+    node.addEventListener('dragstart', (event) => {
+      const isHandleDrag = event.target instanceof Element && event.target.closest('.drag-handle');
+      if (!isHandleDrag) {
+        event.preventDefault();
+        return;
+      }
+
+      state.draggingPaperId = paper.id;
+      node.classList.add('dragging');
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', String(paper.id));
+    });
+
+    node.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      if (state.draggingPaperId && state.draggingPaperId !== paper.id) {
+        node.classList.add('drop-target');
+      }
+    });
+
+    node.addEventListener('dragleave', () => {
+      node.classList.remove('drop-target');
+    });
+
+    node.addEventListener('drop', async (event) => {
+      event.preventDefault();
+      const draggedId = state.draggingPaperId || Number(event.dataTransfer.getData('text/plain'));
+      clearDragClasses();
+      state.draggingPaperId = null;
+      await movePaper(Number(draggedId), paper.id);
+    });
+
+    node.addEventListener('dragend', () => {
+      clearDragClasses();
+      state.draggingPaperId = null;
+    });
+
+    dragHandle.addEventListener('click', (event) => {
+      event.preventDefault();
+    });
 
     const starBtn = node.querySelector('.star-btn');
     starBtn.textContent = paper.starred ? '★' : '☆';
@@ -112,7 +266,7 @@ function render() {
 function renderAuthorResults() {
   authorResults.innerHTML = '';
   if (state.authorResults.length === 0) {
-    authorResults.textContent = 'No results yet. Search for an author above.';
+    renderAuthorMessage('No results yet. Search for an author above.');
     return;
   }
 
@@ -150,13 +304,25 @@ async function batchAddSelected() {
     .filter(Boolean);
 
   if (selected.length === 0) {
-    alert('Select at least one paper to add.');
+    setStatus(authorStatus, 'Select at least one paper to add.', 'error');
     return;
   }
 
-  await api('/api/papers/import-arxiv-batch', {
+  const selectedPapers = state.authorResults
+    .filter((item) => selected.includes(item.arxiv_id))
+    .map((item) => ({
+      arxiv_id: item.arxiv_id,
+      title: item.title,
+      abstract: item.abstract,
+      authors: item.authors,
+      categories: item.categories,
+      published_at: item.published_at,
+      arxiv_url: item.arxiv_url,
+    }));
+
+  await api('/api/papers/import-from-search', {
     method: 'POST',
-    body: JSON.stringify({ values: selected }),
+    body: JSON.stringify({ papers: selectedPapers }),
   });
   await loadPapers();
 
@@ -164,6 +330,8 @@ async function batchAddSelected() {
     if (selected.includes(item.arxiv_id)) item.already_added = true;
   }
   renderAuthorResults();
+  setStatus(authorStatus, `Added ${selected.length} paper${selected.length === 1 ? '' : 's'}.`, 'success');
+  switchTab('tiles');
 }
 
 async function patchPaper(id, patch, shouldReload = true) {
@@ -179,42 +347,59 @@ searchInput.addEventListener('input', () => {
   searchInput._timer = setTimeout(loadPapers, 250);
 });
 
+tabTilesBtn.addEventListener('click', () => switchTab('tiles'));
+tabSearchBtn.addEventListener('click', () => switchTab('search'));
+
 document.getElementById('import-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const input = document.getElementById('arxiv-input');
   if (!input.value.trim()) return;
+  importSubmitBtn.disabled = true;
+  setStatus(importStatus);
   try {
-    await api('/api/papers/import-arxiv', {
+    await api('/api/papers/import-source', {
       method: 'POST',
       body: JSON.stringify({ value: input.value.trim() }),
     });
     input.value = '';
     await loadPapers();
+    setStatus(importStatus, 'Paper imported successfully.', 'success');
+    switchTab('tiles');
   } catch (err) {
-    alert(err.message);
+    setStatus(importStatus, `Import failed: ${err.message}`, 'error');
+  } finally {
+    importSubmitBtn.disabled = false;
   }
 });
 
-document.getElementById('author-search-form').addEventListener('submit', async (event) => {
+authorForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const author = document.getElementById('author-input').value.trim();
-  const maxResults = Number(document.getElementById('author-max-results').value || 12);
+  const author = authorInput.value.trim();
+  const maxResults = Number(authorMaxResults.value || 12);
   if (!author) return;
+  setAuthorLoading(true, `Searching arXiv for ${author}...`);
+  setStatus(authorStatus);
   try {
     await searchByAuthor(author, maxResults);
   } catch (err) {
-    alert(err.message);
+    state.authorResults = [];
+    renderAuthorMessage(`Search failed: ${err.message}`, true);
+    setStatus(authorStatus, `Search failed: ${err.message}`, 'error');
+  } finally {
+    setAuthorLoading(false);
   }
 });
 
-document.getElementById('batch-add-btn').addEventListener('click', async () => {
+batchAddBtn.addEventListener('click', async () => {
+  setStatus(authorStatus);
   try {
     await batchAddSelected();
   } catch (err) {
-    alert(err.message);
+    setStatus(authorStatus, `Batch add failed: ${err.message}`, 'error');
   }
 });
 
+switchTab('tiles');
 await loadProjects();
 await loadPapers();
 renderAuthorResults();

@@ -9,47 +9,71 @@
   <body>
     <header>
       <h1>Vibe Paper Stack</h1>
-      <form id="import-form">
-        <input id="arxiv-input" placeholder="Paste arXiv id or URL" required />
-        <button type="submit">Import</button>
-      </form>
     </header>
 
-    <section class="controls">
-      <input id="search-input" placeholder="Search title, abstract, authors" />
-      <select id="project-filter"></select>
-      <select id="status-filter">
-        <option value="">All statuses</option>
-        <option value="queued">Queued</option>
-        <option value="reading">Reading</option>
-        <option value="done">Done</option>
-      </select>
-      <label><input id="hide-done" type="checkbox" checked />Hide done</label>
+    <nav class="tabs" aria-label="Main sections">
+      <button id="tab-tiles-btn" class="tab-btn active" type="button" data-tab="tiles">Tiles</button>
+      <button id="tab-search-btn" class="tab-btn" type="button" data-tab="search">Search</button>
+    </nav>
+
+    <section id="tab-tiles" class="tab-panel">
+      <section class="controls">
+        <input id="search-input" placeholder="Search title, abstract, authors" />
+        <select id="project-filter"></select>
+        <select id="status-filter">
+          <option value="">All statuses</option>
+          <option value="queued">Queued</option>
+          <option value="reading">Reading</option>
+          <option value="done">Done</option>
+        </select>
+        <label><input id="hide-done" type="checkbox" checked />Hide done</label>
+      </section>
+
+      <section class="tiles-pane">
+        <div id="tiles-status" class="status-message hidden" role="status" aria-live="polite"></div>
+        <main>
+          <div id="papers" class="grid"></div>
+        </main>
+      </section>
     </section>
 
-    <section class="discover">
-      <h2>Find papers by author</h2>
-      <form id="author-search-form" class="author-form">
-        <input id="author-input" placeholder="e.g. Geoffrey Hinton" required />
-        <input id="author-max-results" type="number" min="1" max="50" value="12" />
-        <button type="submit">Search arXiv</button>
-        <button id="batch-add-btn" type="button">Add selected</button>
-      </form>
-      <div id="author-results" class="author-results"></div>
-    </section>
+    <section id="tab-search" class="tab-panel hidden">
+      <section class="discover">
+        <h2>Add Papers</h2>
+        <form id="import-form" class="import-form">
+          <input id="arxiv-input" placeholder="Paste arXiv or LessWrong URL" required />
+          <button id="import-submit-btn" type="submit">Import</button>
+        </form>
+        <div id="import-status" class="status-message hidden" role="status" aria-live="polite"></div>
+      </section>
 
-    <main>
-      <div id="papers" class="grid"></div>
-    </main>
+      <section class="discover">
+        <h2>Find papers by author</h2>
+        <form id="author-search-form" class="author-form">
+          <input id="author-input" placeholder="e.g. Geoffrey Hinton" required />
+          <input id="author-max-results" type="number" min="1" max="50" value="12" />
+          <button id="author-search-btn" type="submit">Search arXiv</button>
+          <button id="batch-add-btn" type="button">Add selected</button>
+        </form>
+        <div id="author-loading" class="throbber hidden" role="status" aria-live="polite">
+          <span class="spinner" aria-hidden="true"></span>
+          <span id="author-loading-text">Searching arXiv...</span>
+        </div>
+        <div id="author-status" class="status-message hidden" role="status" aria-live="polite"></div>
+        <div id="author-results" class="author-results"></div>
+      </section>
+    </section>
 
     <template id="paper-template">
       <article class="card">
         <div class="card-top">
           <h3 class="title"></h3>
+          <button class="drag-handle" type="button" title="Drag to reorder" aria-label="Drag to reorder">Drag</button>
           <button class="star-btn">☆</button>
         </div>
         <div class="meta"></div>
         <p class="abstract"></p>
+        <button class="abstract-toggle hidden" type="button" aria-expanded="false">Show more</button>
         <div class="controls-row">
           <select class="status-select">
             <option value="queued">Queued</option>

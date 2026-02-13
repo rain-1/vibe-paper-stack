@@ -2,14 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import sqlite3
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
-
-import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -17,11 +12,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.db import get_connection, init_db
+from app.sources.arxiv import fetch_arxiv, normalize_arxiv_id, search_arxiv_by_author
+from app.sources.registry import fetch_by_input, normalize_source_id
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
-ARXIV_ID_PATTERN = re.compile(r"(\d{4}\.\d{4,5})(v\d+)?")
-ARXIV_URL_PATTERN = re.compile(r"arxiv\.org/(abs|pdf)/([^?#]+)")
+BATCH_IMPORT_REQUEST_SPACING_SECONDS = 0.8
 
 
 class ProjectIn(BaseModel):
@@ -40,12 +36,34 @@ class ImportArxivBatchIn(BaseModel):
     values: list[str] = Field(min_length=1)
 
 
+class ImportSourceIn(BaseModel):
+    value: str = Field(min_length=1)
+
+
+class ImportArxivResultIn(BaseModel):
+    arxiv_id: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    abstract: str = ""
+    authors: list[str] = Field(default_factory=list)
+    categories: list[str] = Field(default_factory=list)
+    published_at: str | None = None
+    arxiv_url: str | None = None
+
+
+class ImportArxivSearchBatchIn(BaseModel):
+    papers: list[ImportArxivResultIn] = Field(min_length=1)
+
+
 class PaperPatchIn(BaseModel):
     status: str | None = None
     project_id: int | None = None
     rating: int | None = Field(default=None, ge=1, le=5)
     starred: bool | None = None
     notes: str | None = None
+
+
+class PaperReorderIn(BaseModel):
+    paper_ids: list[int] = Field(min_length=1)
 
 
 app = FastAPI(title="Vibe Paper Stack")
@@ -57,45 +75,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.mount("/web", StaticFiles(directory=WEB_DIR), name="web")
-
-
-def extract_arxiv_id(raw_value: str) -> str | None:
-    cleaned = (raw_value or "").strip()
-    if not cleaned:
-        return None
-
-    url_match = ARXIV_URL_PATTERN.search(cleaned)
-    if url_match:
-        cleaned = url_match.group(2).replace(".pdf", "").strip("/")
-
-    cleaned = cleaned.split("?")[0].strip("/")
-
-    id_match = ARXIV_ID_PATTERN.search(cleaned)
-    if id_match:
-        return id_match.group(1)
-
-    parsed = urlparse(cleaned if "://" in cleaned else f"https://{cleaned}")
-    path = parsed.path.strip("/")
-    if path.startswith("abs/") or path.startswith("pdf/"):
-        path = path.split("/", 1)[1]
-
-    path = path.removesuffix(".pdf")
-    if "/" in path:
-        # Legacy arXiv IDs like cs/0112017v1 or math.GT/0309136v2
-        return path.rsplit("v", 1)[0]
-
-    id_match = ARXIV_ID_PATTERN.search(path)
-    if id_match:
-        return id_match.group(1)
-
-    return None
-
-
-def normalize_arxiv_id(value: str) -> str:
-    normalized = extract_arxiv_id(value)
-    if not normalized:
-        raise HTTPException(status_code=400, detail="Could not parse arXiv id from input")
-    return normalized
 
 
 def row_to_paper(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
@@ -126,117 +105,25 @@ def row_to_paper(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
         "notes": row["notes"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+        "sort_order": row["sort_order"],
         "tags": [{"id": tag["id"], "name": tag["name"]} for tag in tags],
     }
-
-
-async def fetch_arxiv(arxiv_id: str) -> dict[str, Any]:
-    url = "https://export.arxiv.org/api/query"
-    try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            response = await client.get(url, params={"id_list": arxiv_id})
-            response.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail="Unable to reach arXiv right now") from exc
-
-    try:
-        root = ET.fromstring(response.text)
-    except ET.ParseError as exc:
-        raise HTTPException(status_code=502, detail="Invalid response from arXiv") from exc
-    ns = {
-        "atom": "http://www.w3.org/2005/Atom",
-        "arxiv": "http://arxiv.org/schemas/atom",
-    }
-    entry = root.find("atom:entry", ns)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="Paper not found on arXiv")
-
-    title = (entry.findtext("atom:title", default="", namespaces=ns) or "").strip().replace("\n", " ")
-    summary = (entry.findtext("atom:summary", default="", namespaces=ns) or "").strip()
-    published = entry.findtext("atom:published", default=None, namespaces=ns)
-
-    authors = [
-        (author.findtext("atom:name", default="", namespaces=ns) or "").strip()
-        for author in entry.findall("atom:author", ns)
-    ]
-    categories = [cat.get("term", "") for cat in entry.findall("atom:category", ns)]
-
-    link = None
-    for link_el in entry.findall("atom:link", ns):
-        if link_el.get("rel") == "alternate":
-            link = link_el.get("href")
-            break
-
-    return {
-        "arxiv_id": arxiv_id,
-        "title": title,
-        "abstract": summary,
-        "authors": [a for a in authors if a],
-        "categories": [c for c in categories if c],
-        "published_at": published,
-        "arxiv_url": link or f"https://arxiv.org/abs/{arxiv_id}",
-    }
-
-
-async def search_arxiv_by_author(author: str, max_results: int = 20) -> list[dict[str, Any]]:
-    url = "https://export.arxiv.org/api/query"
-    params = {
-        "search_query": f'au:"{author}"',
-        "start": 0,
-        "max_results": max_results,
-        "sortBy": "submittedDate",
-        "sortOrder": "descending",
-    }
-    try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            response = await client.get(url, params=params)
-            response.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail="Unable to reach arXiv right now") from exc
-
-    try:
-        root = ET.fromstring(response.text)
-    except ET.ParseError as exc:
-        raise HTTPException(status_code=502, detail="Invalid response from arXiv") from exc
-    ns = {
-        "atom": "http://www.w3.org/2005/Atom",
-        "arxiv": "http://arxiv.org/schemas/atom",
-    }
-
-    results: list[dict[str, Any]] = []
-    for entry in root.findall("atom:entry", ns):
-        raw_id = entry.findtext("atom:id", default="", namespaces=ns)
-        arxiv_id = extract_arxiv_id(raw_id)
-        if not arxiv_id:
-            continue
-        title = (entry.findtext("atom:title", default="", namespaces=ns) or "").strip().replace("\n", " ")
-        summary = (entry.findtext("atom:summary", default="", namespaces=ns) or "").strip()
-        published = entry.findtext("atom:published", default=None, namespaces=ns)
-        authors = [
-            (author_el.findtext("atom:name", default="", namespaces=ns) or "").strip()
-            for author_el in entry.findall("atom:author", ns)
-        ]
-        categories = [cat.get("term", "") for cat in entry.findall("atom:category", ns)]
-        link = f"https://arxiv.org/abs/{arxiv_id}"
-        results.append(
-            {
-                "arxiv_id": arxiv_id,
-                "title": title,
-                "abstract": summary,
-                "authors": [a for a in authors if a],
-                "categories": [c for c in categories if c],
-                "published_at": published,
-                "arxiv_url": link,
-            }
-        )
-    return results
 
 
 def upsert_paper(conn: sqlite3.Connection, meta: dict[str, Any]) -> sqlite3.Row:
     conn.execute(
         """
-        INSERT INTO papers (arxiv_id, title, abstract, authors_json, categories_json, published_at, arxiv_url)
-        VALUES (:arxiv_id, :title, :abstract, :authors_json, :categories_json, :published_at, :arxiv_url)
+        INSERT INTO papers (arxiv_id, title, abstract, authors_json, categories_json, published_at, arxiv_url, sort_order)
+        VALUES (
+            :arxiv_id,
+            :title,
+            :abstract,
+            :authors_json,
+            :categories_json,
+            :published_at,
+            :arxiv_url,
+            COALESCE(:sort_order, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM papers))
+        )
         ON CONFLICT(arxiv_id) DO UPDATE SET
             title=excluded.title,
             abstract=excluded.abstract,
@@ -250,6 +137,7 @@ def upsert_paper(conn: sqlite3.Connection, meta: dict[str, Any]) -> sqlite3.Row:
             **meta,
             "authors_json": json.dumps(meta["authors"]),
             "categories_json": json.dumps(meta["categories"]),
+            "sort_order": meta.get("sort_order"),
         },
     )
     return conn.execute(
@@ -330,6 +218,18 @@ async def import_arxiv(payload: ImportArxivIn) -> dict[str, Any]:
     return paper
 
 
+@app.post("/api/papers/import-source")
+async def import_source(payload: ImportSourceIn) -> dict[str, Any]:
+    meta = await fetch_by_input(payload.value)
+
+    conn = get_connection()
+    with conn:
+        row = upsert_paper(conn, meta)
+    paper = row_to_paper(conn, row)
+    conn.close()
+    return paper
+
+
 @app.post("/api/papers/import-arxiv-batch")
 async def import_arxiv_batch(payload: ImportArxivBatchIn) -> list[dict[str, Any]]:
     normalized_ids = []
@@ -337,7 +237,13 @@ async def import_arxiv_batch(payload: ImportArxivBatchIn) -> list[dict[str, Any]
         normalized_ids.append(normalize_arxiv_id(value))
 
     unique_ids = list(dict.fromkeys(normalized_ids))
-    metas = await asyncio.gather(*[fetch_arxiv(arxiv_id) for arxiv_id in unique_ids])
+
+    metas: list[dict[str, Any]] = []
+    for index, arxiv_id in enumerate(unique_ids):
+        metas.append(await fetch_arxiv(arxiv_id))
+        if index < len(unique_ids) - 1:
+            # arXiv rejects bursty request patterns; small spacing avoids 429 for batch add.
+            await asyncio.sleep(BATCH_IMPORT_REQUEST_SPACING_SECONDS)
 
     conn = get_connection()
     papers: list[dict[str, Any]] = []
@@ -348,6 +254,34 @@ async def import_arxiv_batch(payload: ImportArxivBatchIn) -> list[dict[str, Any]
     conn.close()
     return papers
 
+
+
+
+@app.post("/api/papers/import-from-search")
+def import_from_search(payload: ImportArxivSearchBatchIn) -> list[dict[str, Any]]:
+    metas: list[dict[str, Any]] = []
+    for paper in payload.papers:
+        arxiv_id = normalize_source_id(paper.arxiv_id)
+        metas.append(
+            {
+                "arxiv_id": arxiv_id,
+                "title": paper.title.strip(),
+                "abstract": paper.abstract or "",
+                "authors": [a for a in paper.authors if a],
+                "categories": [c for c in paper.categories if c],
+                "published_at": paper.published_at,
+                "arxiv_url": paper.arxiv_url or f"https://arxiv.org/abs/{arxiv_id}",
+            }
+        )
+
+    conn = get_connection()
+    papers: list[dict[str, Any]] = []
+    with conn:
+        for meta in metas:
+            row = upsert_paper(conn, meta)
+            papers.append(row_to_paper(conn, row))
+    conn.close()
+    return papers
 
 @app.get("/api/arxiv/search-by-author")
 async def arxiv_search_by_author(author: str = Query(min_length=2), max_results: int = Query(default=20, ge=1, le=50)) -> list[dict[str, Any]]:
@@ -407,13 +341,39 @@ def list_papers(
         FROM papers p
         LEFT JOIN projects pr ON pr.id = p.project_id
         {where}
-        ORDER BY p.starred DESC, p.created_at DESC
+        ORDER BY COALESCE(p.sort_order, 2147483647) ASC, p.created_at DESC
         """,
         params,
     ).fetchall()
     data = [row_to_paper(conn, row) for row in rows]
     conn.close()
     return data
+
+
+@app.post("/api/papers/reorder")
+def reorder_papers(payload: PaperReorderIn) -> dict[str, bool]:
+    paper_ids = payload.paper_ids
+    if len(set(paper_ids)) != len(paper_ids):
+        raise HTTPException(status_code=400, detail="paper_ids must be unique")
+
+    placeholders = ",".join(["?"] * len(paper_ids))
+
+    conn = get_connection()
+    rows = conn.execute(f"SELECT id, sort_order FROM papers WHERE id IN ({placeholders})", paper_ids).fetchall()
+    if len(rows) != len(paper_ids):
+        conn.close()
+        raise HTTPException(status_code=404, detail="One or more papers were not found")
+
+    min_sort_order = min((row["sort_order"] for row in rows if row["sort_order"] is not None), default=1)
+
+    with conn:
+        for index, paper_id in enumerate(paper_ids):
+            conn.execute(
+                "UPDATE papers SET sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (min_sort_order + index, paper_id),
+            )
+    conn.close()
+    return {"ok": True}
 
 
 @app.patch("/api/papers/{paper_id}")
