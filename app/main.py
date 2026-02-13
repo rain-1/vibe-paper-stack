@@ -7,6 +7,7 @@ import sqlite3
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query
@@ -20,7 +21,7 @@ from app.db import get_connection, init_db
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 ARXIV_ID_PATTERN = re.compile(r"(\d{4}\.\d{4,5})(v\d+)?")
-ARXIV_URL_PATTERN = re.compile(r"arxiv\.org/(abs|pdf)/([^/?#]+)")
+ARXIV_URL_PATTERN = re.compile(r"arxiv\.org/(abs|pdf)/([^?#]+)")
 
 
 class ProjectIn(BaseModel):
@@ -58,15 +59,43 @@ app.add_middleware(
 app.mount("/web", StaticFiles(directory=WEB_DIR), name="web")
 
 
-def normalize_arxiv_id(value: str) -> str:
-    cleaned = value.strip()
+def extract_arxiv_id(raw_value: str) -> str | None:
+    cleaned = (raw_value or "").strip()
+    if not cleaned:
+        return None
+
     url_match = ARXIV_URL_PATTERN.search(cleaned)
     if url_match:
-        cleaned = url_match.group(2).replace(".pdf", "")
+        cleaned = url_match.group(2).replace(".pdf", "").strip("/")
+
+    cleaned = cleaned.split("?")[0].strip("/")
+
     id_match = ARXIV_ID_PATTERN.search(cleaned)
-    if not id_match:
+    if id_match:
+        return id_match.group(1)
+
+    parsed = urlparse(cleaned if "://" in cleaned else f"https://{cleaned}")
+    path = parsed.path.strip("/")
+    if path.startswith("abs/") or path.startswith("pdf/"):
+        path = path.split("/", 1)[1]
+
+    path = path.removesuffix(".pdf")
+    if "/" in path:
+        # Legacy arXiv IDs like cs/0112017v1 or math.GT/0309136v2
+        return path.rsplit("v", 1)[0]
+
+    id_match = ARXIV_ID_PATTERN.search(path)
+    if id_match:
+        return id_match.group(1)
+
+    return None
+
+
+def normalize_arxiv_id(value: str) -> str:
+    normalized = extract_arxiv_id(value)
+    if not normalized:
         raise HTTPException(status_code=400, detail="Could not parse arXiv id from input")
-    return id_match.group(1)
+    return normalized
 
 
 def row_to_paper(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
@@ -103,11 +132,17 @@ def row_to_paper(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
 
 async def fetch_arxiv(arxiv_id: str) -> dict[str, Any]:
     url = "https://export.arxiv.org/api/query"
-    async with httpx.AsyncClient(timeout=12.0) as client:
-        response = await client.get(url, params={"id_list": arxiv_id})
-        response.raise_for_status()
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            response = await client.get(url, params={"id_list": arxiv_id})
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Unable to reach arXiv right now") from exc
 
-    root = ET.fromstring(response.text)
+    try:
+        root = ET.fromstring(response.text)
+    except ET.ParseError as exc:
+        raise HTTPException(status_code=502, detail="Invalid response from arXiv") from exc
     ns = {
         "atom": "http://www.w3.org/2005/Atom",
         "arxiv": "http://arxiv.org/schemas/atom",
@@ -152,11 +187,17 @@ async def search_arxiv_by_author(author: str, max_results: int = 20) -> list[dic
         "sortBy": "submittedDate",
         "sortOrder": "descending",
     }
-    async with httpx.AsyncClient(timeout=12.0) as client:
-        response = await client.get(url, params=params)
-        response.raise_for_status()
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Unable to reach arXiv right now") from exc
 
-    root = ET.fromstring(response.text)
+    try:
+        root = ET.fromstring(response.text)
+    except ET.ParseError as exc:
+        raise HTTPException(status_code=502, detail="Invalid response from arXiv") from exc
     ns = {
         "atom": "http://www.w3.org/2005/Atom",
         "arxiv": "http://arxiv.org/schemas/atom",
@@ -165,7 +206,9 @@ async def search_arxiv_by_author(author: str, max_results: int = 20) -> list[dic
     results: list[dict[str, Any]] = []
     for entry in root.findall("atom:entry", ns):
         raw_id = entry.findtext("atom:id", default="", namespaces=ns)
-        arxiv_id = normalize_arxiv_id(raw_id)
+        arxiv_id = extract_arxiv_id(raw_id)
+        if not arxiv_id:
+            continue
         title = (entry.findtext("atom:title", default="", namespaces=ns) or "").strip().replace("\n", " ")
         summary = (entry.findtext("atom:summary", default="", namespaces=ns) or "").strip()
         published = entry.findtext("atom:published", default=None, namespaces=ns)
