@@ -14,6 +14,7 @@ from pypdf import PdfReader
 
 PDF_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 PDF_HEADERS = {"User-Agent": "vibe-paper-stack/1.0 (mailto:local@localhost)"}
+MAX_PDF_BYTES = 20 * 1024 * 1024
 
 
 def extract_pdf_url(value: str) -> str | None:
@@ -113,6 +114,38 @@ def _extract_pdf_metadata(pdf_bytes: bytes, fallback_title: str) -> tuple[str, s
     return title, abstract
 
 
+def _ensure_size_within_limit(content_length_header: str | None) -> None:
+    if not content_length_header:
+        return
+
+    try:
+        content_length = int(content_length_header)
+    except ValueError:
+        return
+
+    if content_length > MAX_PDF_BYTES:
+        raise HTTPException(status_code=413, detail=f"PDF is too large (max {MAX_PDF_BYTES // (1024 * 1024)} MB)")
+
+
+async def _download_pdf_bytes(client: httpx.AsyncClient, url: str) -> tuple[bytes, str]:
+    chunks: list[bytes] = []
+    total = 0
+
+    async with client.stream("GET", url) as response:
+        if response.status_code >= 400:
+            raise HTTPException(status_code=502, detail="Unable to download PDF right now")
+
+        _ensure_size_within_limit(response.headers.get("content-length"))
+
+        async for chunk in response.aiter_bytes():
+            total += len(chunk)
+            if total > MAX_PDF_BYTES:
+                raise HTTPException(status_code=413, detail=f"PDF is too large (max {MAX_PDF_BYTES // (1024 * 1024)} MB)")
+            chunks.append(chunk)
+
+        return b"".join(chunks), str(response.url)
+
+
 async def fetch_pdf(value: str) -> dict[str, Any]:
     url = normalize_pdf_url(value)
 
@@ -126,20 +159,18 @@ async def fetch_pdf(value: str) -> dict[str, Any]:
         if response.status_code >= 400:
             raise HTTPException(status_code=502, detail="Unable to fetch PDF right now")
 
+        _ensure_size_within_limit(response.headers.get("content-length"))
+
         content_type = (response.headers.get("content-type") or "").lower()
         final_url = str(response.url)
         if "pdf" not in content_type and not urlparse(final_url).path.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="URL does not appear to be a PDF")
 
-        pdf_response = await client.get(final_url)
+        pdf_bytes, final_url = await _download_pdf_bytes(client, final_url)
 
-    if pdf_response.status_code >= 400:
-        raise HTTPException(status_code=502, detail="Unable to download PDF right now")
-
-    final_url = str(pdf_response.url)
     doc_id = hashlib.sha1(final_url.encode("utf-8")).hexdigest()[:16]
     fallback_title = _title_from_url(final_url)
-    title, abstract = await asyncio.to_thread(_extract_pdf_metadata, pdf_response.content, fallback_title)
+    title, abstract = await asyncio.to_thread(_extract_pdf_metadata, pdf_bytes, fallback_title)
 
     return {
         "arxiv_id": f"pdf:{doc_id}",

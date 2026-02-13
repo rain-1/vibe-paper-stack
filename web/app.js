@@ -281,31 +281,49 @@ function renderProjectsPanel() {
 
   const unassignedRow = document.createElement('div');
   unassignedRow.className = 'project-summary-row';
-  unassignedRow.innerHTML = `
-    <div>
-      <div class="project-summary-name">No project</div>
-      <div class="project-summary-meta">${state.projectSummary.unassigned_count || 0} paper(s)</div>
-    </div>
-    <div class="project-summary-actions">
-      <button type="button">View</button>
-    </div>
-  `;
-  unassignedRow.querySelector('button').addEventListener('click', () => applyProjectFilterAndShowTiles('__none__'));
+
+  const unassignedInfo = document.createElement('div');
+  const unassignedName = document.createElement('div');
+  unassignedName.className = 'project-summary-name';
+  unassignedName.textContent = 'No project';
+  const unassignedMeta = document.createElement('div');
+  unassignedMeta.className = 'project-summary-meta';
+  unassignedMeta.textContent = `${state.projectSummary.unassigned_count || 0} paper(s)`;
+  unassignedInfo.append(unassignedName, unassignedMeta);
+
+  const unassignedActions = document.createElement('div');
+  unassignedActions.className = 'project-summary-actions';
+  const unassignedViewBtn = document.createElement('button');
+  unassignedViewBtn.type = 'button';
+  unassignedViewBtn.textContent = 'View';
+  unassignedViewBtn.addEventListener('click', () => applyProjectFilterAndShowTiles('__none__'));
+  unassignedActions.append(unassignedViewBtn);
+
+  unassignedRow.append(unassignedInfo, unassignedActions);
   projectSummaryList.append(unassignedRow);
 
   for (const project of state.projectSummary.projects || []) {
     const row = document.createElement('div');
     row.className = 'project-summary-row';
-    row.innerHTML = `
-      <div>
-        <div class="project-summary-name">${project.name}</div>
-        <div class="project-summary-meta">${project.total} total • ${project.queued} queued • ${project.reading} reading • ${project.done} done</div>
-      </div>
-      <div class="project-summary-actions">
-        <button type="button">View</button>
-      </div>
-    `;
-    row.querySelector('button').addEventListener('click', () => applyProjectFilterAndShowTiles(String(project.id)));
+
+    const info = document.createElement('div');
+    const name = document.createElement('div');
+    name.className = 'project-summary-name';
+    name.textContent = project.name;
+    const meta = document.createElement('div');
+    meta.className = 'project-summary-meta';
+    meta.textContent = `${project.total} total • ${project.queued} queued • ${project.reading} reading • ${project.done} done`;
+    info.append(name, meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'project-summary-actions';
+    const viewBtn = document.createElement('button');
+    viewBtn.type = 'button';
+    viewBtn.textContent = 'View';
+    viewBtn.addEventListener('click', () => applyProjectFilterAndShowTiles(String(project.id)));
+    actions.append(viewBtn);
+
+    row.append(info, actions);
     projectSummaryList.append(row);
   }
 
@@ -538,8 +556,16 @@ function renderAuthorResults() {
     checkbox.dataset.arxivId = paper.arxiv_id;
 
     const text = document.createElement('div');
-    text.innerHTML = `<div class="author-title">${paper.title}</div>
-      <div class="author-meta">${paper.arxiv_id} • ${paper.authors.slice(0, 3).join(', ')}${paper.authors.length > 3 ? '…' : ''}</div>`;
+    const title = document.createElement('div');
+    title.className = 'author-title';
+    title.textContent = paper.title;
+
+    const meta = document.createElement('div');
+    meta.className = 'author-meta';
+    const authorText = `${paper.authors.slice(0, 3).join(', ')}${paper.authors.length > 3 ? '…' : ''}`;
+    meta.textContent = `${paper.arxiv_id} • ${authorText}`;
+
+    text.append(title, meta);
 
     const stateBadge = document.createElement('div');
     stateBadge.className = 'author-added';
