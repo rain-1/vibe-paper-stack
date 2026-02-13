@@ -23,7 +23,17 @@ const tabSearchBtn = document.getElementById('tab-search-btn');
 const tabTiles = document.getElementById('tab-tiles');
 const tabSearch = document.getElementById('tab-search');
 
-const state = { papers: [], projects: [], authorResults: [], draggingPaperId: null, activeTab: 'tiles' };
+const ARXIV_FAVICON_URL = 'https://static.arxiv.org/static/base/0.17.8/images/icons/favicon.ico';
+const LESSWRONG_FAVICON_URL = 'https://www.lesswrong.com/favicon.ico';
+
+const state = {
+  papers: [],
+  projects: [],
+  authorResults: [],
+  draggingPaperId: null,
+  dragArmedPaperId: null,
+  activeTab: 'tiles',
+};
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -89,7 +99,41 @@ function renderAuthorMessage(message, isError = false) {
 function clearDragClasses() {
   for (const card of papersEl.querySelectorAll('.card')) {
     card.classList.remove('dragging', 'drop-target');
+    card.draggable = false;
   }
+}
+
+function sourceBadgeInfo(paper) {
+  const isLessWrong = String(paper.arxiv_id || '').startsWith('lw:');
+  if (isLessWrong) {
+    return { name: 'LW', icon: LESSWRONG_FAVICON_URL };
+  }
+  return { name: 'arXiv', icon: ARXIV_FAVICON_URL };
+}
+
+function setMetaContent(metaEl, paper) {
+  metaEl.innerHTML = '';
+  const source = sourceBadgeInfo(paper);
+
+  const badge = document.createElement('span');
+  badge.className = 'source-badge';
+
+  const icon = document.createElement('img');
+  icon.className = 'source-icon';
+  icon.alt = source.name;
+  icon.src = source.icon;
+
+  const label = document.createElement('span');
+  label.textContent = source.name;
+
+  badge.append(icon, label);
+
+  const project = paper.project_name || 'No project';
+  const author = paper.authors.slice(0, 2).join(', ') + (paper.authors.length > 2 ? '…' : '');
+  const metaText = document.createElement('span');
+  metaText.textContent = `${project} • ${paper.status} • ${author}`;
+
+  metaEl.append(badge, metaText);
 }
 
 async function persistPaperOrder() {
@@ -132,23 +176,19 @@ async function loadPapers() {
   render();
 }
 
-function metaLine(p) {
-  const project = p.project_name || 'No project';
-  const author = p.authors.slice(0, 2).join(', ') + (p.authors.length > 2 ? '…' : '');
-  return `${project} • ${p.status} • ${author}`;
-}
-
 function render() {
   papersEl.innerHTML = '';
   for (const paper of state.papers) {
     const node = template.content.firstElementChild.cloneNode(true);
     const dragHandle = node.querySelector('.drag-handle');
     node.dataset.paperId = String(paper.id);
-    node.draggable = true;
+    node.draggable = false;
 
     node.querySelector('.title').textContent = paper.title;
     node.querySelector('.title').title = paper.title;
-    node.querySelector('.meta').textContent = metaLine(paper);
+
+    const metaEl = node.querySelector('.meta');
+    setMetaContent(metaEl, paper);
 
     const abstractEl = node.querySelector('.abstract');
     const abstractToggle = node.querySelector('.abstract-toggle');
@@ -169,9 +209,18 @@ function render() {
       abstractEl.classList.remove('expanded');
     }
 
+    dragHandle.addEventListener('mousedown', () => {
+      state.dragArmedPaperId = paper.id;
+      node.draggable = true;
+    });
+
+    dragHandle.addEventListener('touchstart', () => {
+      state.dragArmedPaperId = paper.id;
+      node.draggable = true;
+    }, { passive: true });
+
     node.addEventListener('dragstart', (event) => {
-      const isHandleDrag = event.target instanceof Element && event.target.closest('.drag-handle');
-      if (!isHandleDrag) {
+      if (state.dragArmedPaperId !== paper.id) {
         event.preventDefault();
         return;
       }
@@ -198,12 +247,24 @@ function render() {
       const draggedId = state.draggingPaperId || Number(event.dataTransfer.getData('text/plain'));
       clearDragClasses();
       state.draggingPaperId = null;
+      state.dragArmedPaperId = null;
       await movePaper(Number(draggedId), paper.id);
     });
 
     node.addEventListener('dragend', () => {
       clearDragClasses();
       state.draggingPaperId = null;
+      state.dragArmedPaperId = null;
+    });
+
+    dragHandle.addEventListener('mouseup', () => {
+      node.draggable = false;
+      state.dragArmedPaperId = null;
+    });
+
+    dragHandle.addEventListener('mouseleave', () => {
+      node.draggable = false;
+      state.dragArmedPaperId = null;
     });
 
     dragHandle.addEventListener('click', (event) => {
