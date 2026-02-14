@@ -855,18 +855,17 @@ input[type="file"] {
 
 .jneko-area {
   flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--platinum-light);
-  cursor: pointer;
   position: relative;
+  overflow: hidden;
+  background: var(--platinum-light);
+  cursor: url('/web/mouse-cursor.svg') 16 16, crosshair;
 }
 
 .jneko-area img {
   image-rendering: pixelated;
   image-rendering: -moz-crisp-edges;
   image-rendering: crisp-edges;
+  pointer-events: none;
 }
 
 .neko-info {

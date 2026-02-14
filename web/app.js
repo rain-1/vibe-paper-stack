@@ -107,7 +107,9 @@ function switchTab(tabName) {
     const nekoDiv = document.getElementById('jneko');
     nekoDiv.innerHTML = '';
     nekogame = new Neko(nekoDiv);
+    nekogame.start();
   } else if (!showNeko && nekogame) {
+    nekogame.stop();
     nekogame = null;
   }
 }
@@ -815,117 +817,160 @@ batchAddBtn.addEventListener('click', async () => {
 exportDataBtn.addEventListener('click', exportDataSnapshot);
 importDataBtn.addEventListener('click', importDataSnapshot);
 
-const imageNames = [
-  'awake',
-  'jare2',
-  'kaki1',
-  'kaki2',
-  'mati2',
-  'mati3',
-  'sleep1',
-  'sleep2',
-];
 const nekoSize = 64;
-const images = Object.fromEntries(imageNames.map(name => {
-  const image = new Image(nekoSize, nekoSize);
-  image.src = '/web/bitmaps/' + name + '.png';
-  return [name, image]
+const nekoSpeed = 4;
+const nekoIdleDelay = 3000;
+const nekoCatchRadius = 24;
+
+const allSpriteNames = [
+  'awake', 'jare2', 'kaki1', 'kaki2', 'mati2', 'mati3', 'sleep1', 'sleep2',
+  'up1', 'up2', 'down1', 'down2', 'left1', 'left2', 'right1', 'right2',
+  'upleft1', 'upleft2', 'upright1', 'upright2', 'dwleft1', 'dwleft2', 'dwright1', 'dwright2',
+  'utogi1', 'utogi2', 'dtogi1', 'dtogi2', 'ltogi1', 'ltogi2', 'rtogi1', 'rtogi2',
+];
+const sprites = Object.fromEntries(allSpriteNames.map(name => {
+  const img = new Image(nekoSize, nekoSize);
+  img.src = '/web/bitmaps/' + name + '.png';
+  return [name, img];
 }));
 
-const stateMachine = {
-  sleep: {
-    image: ['sleep1', 'sleep2'],
-    imageInterval: 1,
-    click: 'awake'
-  },
-  awake: {
-    image: 'awake',
-    nextState: 'normal',
-    nextStateDelay: 2.5,
-  },
-  normal: {
-    image: 'mati2',
-    nextState: ['normal', 'normal', 'normal', 'tilt', 'scratch', 'yawn'],
-    nextStateDelay: 1.5,
-  },
-  tilt: {
-    image: 'jare2',
-    nextState: 'normal',
-    nextStateDelay: 1,
-  },
-  yawn: {
-    image: 'mati3',
-    nextState: ['normal', 'normal', 'sleep'],
-    nextStateDelay: 1,
-  },
-  scratch: {
-    image: ['kaki1', 'kaki2'],
-    imageInterval: 0.1,
-    nextState: 'normal',
-    nextStateDelay: 3,
-  }
-};
+function directionSprites(dx, dy) {
+  const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+  if (angle >= -22.5 && angle < 22.5) return ['right1', 'right2'];
+  if (angle >= 22.5 && angle < 67.5) return ['dwright1', 'dwright2'];
+  if (angle >= 67.5 && angle < 112.5) return ['down1', 'down2'];
+  if (angle >= 112.5 && angle < 157.5) return ['dwleft1', 'dwleft2'];
+  if (angle >= 157.5 || angle < -157.5) return ['left1', 'left2'];
+  if (angle >= -157.5 && angle < -112.5) return ['upleft1', 'upleft2'];
+  if (angle >= -112.5 && angle < -67.5) return ['up1', 'up2'];
+  return ['upright1', 'upright2'];
+}
+
+function directionStopSprite(dx, dy) {
+  const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+  const absAngle = Math.abs(angle);
+  if (absAngle < 45) return 'rtogi1';
+  if (absAngle > 135) return 'ltogi1';
+  if (angle > 0) return 'dtogi1';
+  return 'utogi1';
+}
 
 class Neko {
-
   constructor(elem) {
     this.elem = elem;
-    this.stateMachine = stateMachine;
     this.imgElem = new Image(nekoSize, nekoSize);
+    this.imgElem.style.position = 'absolute';
+    this.imgElem.style.imageRendering = 'pixelated';
     elem.appendChild(this.imgElem);
-    this.imgElem.addEventListener('click', () => this.onClick());
-    this.setState('sleep');
+
+    const rect = elem.getBoundingClientRect();
+    this.x = rect.width / 2;
+    this.y = rect.height / 2;
+    this.mouseX = this.x;
+    this.mouseY = this.y;
+    this.lastDx = 0;
+    this.lastDy = 1;
+
+    this.frame = 0;
+    this.state = 'idle';
+    this.idleTimer = null;
+    this.sleepTimer = null;
+    this.animId = null;
+    this.running = false;
+
+    this.updatePosition();
+    this.setSprite('mati2');
+
+    this.onMouseMove = (e) => {
+      const r = this.elem.getBoundingClientRect();
+      this.mouseX = e.clientX - r.left;
+      this.mouseY = e.clientY - r.top;
+      if (this.state === 'sleep' || this.state === 'drowsy') {
+        this.state = 'awake';
+        this.setSprite('awake');
+        clearTimeout(this.sleepTimer);
+        setTimeout(() => { if (this.state === 'awake') this.state = 'chase'; }, 500);
+      } else if (this.state === 'idle') {
+        this.state = 'chase';
+      }
+      clearTimeout(this.idleTimer);
+      this.idleTimer = setTimeout(() => {
+        if (this.state === 'chase' || this.state === 'idle') {
+          this.state = 'idle';
+          this.setSprite(directionStopSprite(this.lastDx, this.lastDy));
+          this.sleepTimer = setTimeout(() => {
+            if (this.state === 'idle') {
+              this.state = 'drowsy';
+              this.setSprite('kaki1');
+              setTimeout(() => {
+                if (this.state === 'drowsy') {
+                  this.setSprite('mati3');
+                  setTimeout(() => {
+                    if (this.state === 'drowsy') {
+                      this.state = 'sleep';
+                    }
+                  }, 1500);
+                }
+              }, 2000);
+            }
+          }, 3000);
+        }
+      }, nekoIdleDelay);
+    };
+
+    this.elem.addEventListener('mousemove', this.onMouseMove);
   }
 
-  #animationIndex = 0;
-
-  renderImage() {
-    let name = this.stateMachine[this.#state].image;
-    this.#animationIndex++;
-    if (Array.isArray(name)) {
-      name = name[this.#animationIndex % name.length];
-    }
-    this.imgElem.src = images[name].src;
+  setSprite(name) {
+    this.imgElem.src = sprites[name].src;
   }
 
-  #state = null;
-  #nextStateTimeout = null;
-  #imageCycleInterval = null;
-
-  setState(stateName) {
-    clearTimeout(this.#nextStateTimeout);
-    clearInterval(this.#imageCycleInterval);
-
-    if (Array.isArray(stateName)) {
-      stateName = stateName[Math.floor(Math.random()*(stateName.length))];
-    }
-    if (!this.stateMachine[stateName]) {
-      throw new Error('Unknown state: ' + stateName);
-    }
-    this.#state = stateName;
-    const stateData = this.stateMachine[this.#state];
-
-    if (stateData.nextState) {
-      this.#nextStateTimeout = setTimeout(
-        () => this.setState(stateData.nextState),
-        stateData.nextStateDelay * 1000
-      );
-    }
-
-    if (stateData.imageInterval) {
-      this.#imageCycleInterval = setInterval(
-        () => this.renderImage(),
-        stateData.imageInterval*1000
-      );
-    }
-    this.renderImage();
+  updatePosition() {
+    this.imgElem.style.left = (this.x - nekoSize / 2) + 'px';
+    this.imgElem.style.top = (this.y - nekoSize / 2) + 'px';
   }
 
-  onClick() {
-    const stateData = this.stateMachine[this.#state];
-    if (stateData.click) {
-      this.setState(stateData.click);
+  start() {
+    this.running = true;
+    this.tick();
+  }
+
+  stop() {
+    this.running = false;
+    if (this.animId) cancelAnimationFrame(this.animId);
+    clearTimeout(this.idleTimer);
+    clearTimeout(this.sleepTimer);
+    this.elem.removeEventListener('mousemove', this.onMouseMove);
+  }
+
+  tick() {
+    if (!this.running) return;
+    this.frame++;
+
+    if (this.state === 'chase') {
+      const dx = this.mouseX - this.x;
+      const dy = this.mouseY - this.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist > nekoCatchRadius) {
+        const angle = Math.atan2(dy, dx);
+        this.x += Math.cos(angle) * nekoSpeed;
+        this.y += Math.sin(angle) * nekoSpeed;
+        this.lastDx = dx;
+        this.lastDy = dy;
+        this.updatePosition();
+
+        const pair = directionSprites(dx, dy);
+        this.setSprite(pair[Math.floor(this.frame / 4) % 2]);
+      } else {
+        this.state = 'idle';
+        this.setSprite(directionStopSprite(this.lastDx, this.lastDy));
+      }
+    } else if (this.state === 'sleep') {
+      this.setSprite(Math.floor(this.frame / 30) % 2 === 0 ? 'sleep1' : 'sleep2');
     }
+
+    this.animId = requestAnimationFrame(() => this.tick());
   }
 }
 

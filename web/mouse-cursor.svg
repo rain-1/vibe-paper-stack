@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!-- body -->
+  <ellipse cx="16" cy="18" rx="7" ry="9" fill="#999" stroke="#333" stroke-width="1.5"/>
+  <!-- left ear -->
+  <circle cx="11" cy="10" r="4" fill="#ccc" stroke="#333" stroke-width="1.5"/>
+  <circle cx="11" cy="10" r="2" fill="#ffb6c1"/>
+  <!-- right ear -->
+  <circle cx="21" cy="10" r="4" fill="#ccc" stroke="#333" stroke-width="1.5"/>
+  <circle cx="21" cy="10" r="2" fill="#ffb6c1"/>
+  <!-- left eye -->
+  <circle cx="13" cy="16" r="1.5" fill="#111"/>
+  <!-- right eye -->
+  <circle cx="19" cy="16" r="1.5" fill="#111"/>
+  <!-- nose -->
+  <circle cx="16" cy="18" r="1" fill="#ff69b4"/>
+  <!-- whiskers -->
+  <line x1="8" y1="17" x2="13" y2="18" stroke="#333" stroke-width="0.7"/>
+  <line x1="8" y1="19" x2="13" y2="19" stroke="#333" stroke-width="0.7"/>
+  <line x1="19" y1="18" x2="24" y2="17" stroke="#333" stroke-width="0.7"/>
+  <line x1="19" y1="19" x2="24" y2="19" stroke="#333" stroke-width="0.7"/>
+  <!-- tail -->
+  <path d="M 23 22 Q 28 20 26 28" fill="none" stroke="#999" stroke-width="2" stroke-linecap="round"/>
+</svg>
