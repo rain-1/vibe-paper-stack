@@ -849,22 +849,33 @@ input[type="file"] {
   width: 100%;
   height: calc(100vh - 180px);
   min-height: 600px;
-  background: var(--window-bg);
+  background: var(--platinum-light);
   overflow: hidden;
 }
 
-#neko-canvas {
+.jneko-area {
   flex: 1;
-  display: block;
-  cursor: crosshair;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--platinum-light);
+  cursor: pointer;
+  position: relative;
+}
+
+.jneko-area img {
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
 }
 
 .neko-info {
   padding: 12px;
   font-family: var(--font-body);
   font-size: 12px;
-  background: var(--platinum-light);
-  border-top: 2px solid var(--border-dark);
+  background: var(--platinum);
+  border-top: 2px solid;
+  border-top-color: var(--border-light) var(--border-dark) var(--border-dark) var(--border-light);
   color: var(--text-secondary);
   text-align: center;
 }

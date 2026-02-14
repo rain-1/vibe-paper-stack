@@ -104,10 +104,10 @@ function switchTab(tabName) {
   tabNekoBtn.classList.toggle('active', showNeko);
 
   if (showNeko && !nekogame) {
-    nekogame = new Neko();
-    nekogame.start();
+    const nekoDiv = document.getElementById('jneko');
+    nekoDiv.innerHTML = '';
+    nekogame = new Neko(nekoDiv);
   } else if (!showNeko && nekogame) {
-    nekogame.stop();
     nekogame = null;
   }
 }
@@ -815,218 +815,117 @@ batchAddBtn.addEventListener('click', async () => {
 exportDataBtn.addEventListener('click', exportDataSnapshot);
 importDataBtn.addEventListener('click', importDataSnapshot);
 
+const imageNames = [
+  'awake',
+  'jare2',
+  'kaki1',
+  'kaki2',
+  'mati2',
+  'mati3',
+  'sleep1',
+  'sleep2',
+];
+const nekoSize = 64;
+const images = Object.fromEntries(imageNames.map(name => {
+  const image = new Image(nekoSize, nekoSize);
+  image.src = '/web/bitmaps/' + name + '.png';
+  return [name, image]
+}));
+
+const stateMachine = {
+  sleep: {
+    image: ['sleep1', 'sleep2'],
+    imageInterval: 1,
+    click: 'awake'
+  },
+  awake: {
+    image: 'awake',
+    nextState: 'normal',
+    nextStateDelay: 2.5,
+  },
+  normal: {
+    image: 'mati2',
+    nextState: ['normal', 'normal', 'normal', 'tilt', 'scratch', 'yawn'],
+    nextStateDelay: 1.5,
+  },
+  tilt: {
+    image: 'jare2',
+    nextState: 'normal',
+    nextStateDelay: 1,
+  },
+  yawn: {
+    image: 'mati3',
+    nextState: ['normal', 'normal', 'sleep'],
+    nextStateDelay: 1,
+  },
+  scratch: {
+    image: ['kaki1', 'kaki2'],
+    imageInterval: 0.1,
+    nextState: 'normal',
+    nextStateDelay: 3,
+  }
+};
+
 class Neko {
-  constructor() {
-    this.canvas = document.getElementById('neko-canvas');
-    this.ctx = this.canvas.getContext('2d');
-    this.canvas.width = window.innerWidth;
-    this.canvas.height = Math.max(600, window.innerHeight - 200);
 
-    this.catX = this.canvas.width / 2;
-    this.catY = this.canvas.height / 2;
-    this.mouseX = this.catX;
-    this.mouseY = this.catY;
-    this.targetX = this.catX;
-    this.targetY = this.catY;
-
-    this.speed = 3;
-    this.idleTimeout = null;
-    this.isIdle = false;
-    this.lastMoveTime = Date.now();
-    this.frameCount = 0;
-    this.animationId = null;
-    this.running = false;
-
-    this.setupEventListeners();
+  constructor(elem) {
+    this.elem = elem;
+    this.stateMachine = stateMachine;
+    this.imgElem = new Image(nekoSize, nekoSize);
+    elem.appendChild(this.imgElem);
+    this.imgElem.addEventListener('click', () => this.onClick());
+    this.setState('sleep');
   }
 
-  setupEventListeners() {
-    this.handleMouseMove = (e) => {
-      this.mouseX = e.clientX;
-      this.mouseY = e.clientY - (window.innerHeight - this.canvas.height) / 2;
-      this.targetX = this.mouseX;
-      this.targetY = this.mouseY;
-      this.lastMoveTime = Date.now();
-      if (this.isIdle) {
-        this.isIdle = false;
-      }
-      clearTimeout(this.idleTimeout);
-      this.idleTimeout = setTimeout(() => {
-        this.isIdle = true;
-      }, 3000);
-    };
+  #animationIndex = 0;
 
-    this.handleWindowResize = () => {
-      this.canvas.width = window.innerWidth;
-      this.canvas.height = Math.max(600, window.innerHeight - 200);
-    };
-
-    document.addEventListener('mousemove', this.handleMouseMove);
-    window.addEventListener('resize', this.handleWindowResize);
-  }
-
-  start() {
-    this.running = true;
-    this.animate();
-  }
-
-  stop() {
-    this.running = false;
-    if (this.animationId) {
-      cancelAnimationFrame(this.animationId);
+  renderImage() {
+    let name = this.stateMachine[this.#state].image;
+    this.#animationIndex++;
+    if (Array.isArray(name)) {
+      name = name[this.#animationIndex % name.length];
     }
-    clearTimeout(this.idleTimeout);
-    document.removeEventListener('mousemove', this.handleMouseMove);
-    window.removeEventListener('resize', this.handleWindowResize);
+    this.imgElem.src = images[name].src;
   }
 
-  animate() {
-    this.update();
-    this.draw();
-    if (this.running) {
-      this.animationId = requestAnimationFrame(() => this.animate());
+  #state = null;
+  #nextStateTimeout = null;
+  #imageCycleInterval = null;
+
+  setState(stateName) {
+    clearTimeout(this.#nextStateTimeout);
+    clearInterval(this.#imageCycleInterval);
+
+    if (Array.isArray(stateName)) {
+      stateName = stateName[Math.floor(Math.random()*(stateName.length))];
     }
-  }
-
-  update() {
-    this.frameCount++;
-
-    if (!this.isIdle) {
-      const dx = this.targetX - this.catX;
-      const dy = this.targetY - this.catY;
-      const distance = Math.sqrt(dx * dx + dy * dy);
-
-      if (distance > 10) {
-        const angle = Math.atan2(dy, dx);
-        this.catX += Math.cos(angle) * this.speed;
-        this.catY += Math.sin(angle) * this.speed;
-      }
+    if (!this.stateMachine[stateName]) {
+      throw new Error('Unknown state: ' + stateName);
     }
-  }
+    this.#state = stateName;
+    const stateData = this.stateMachine[this.#state];
 
-  draw() {
-    this.ctx.fillStyle = '#d4d4d4';
-    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-
-    this.ctx.save();
-    this.ctx.translate(this.catX, this.catY);
-
-    if (this.isIdle) {
-      this.drawSleepingCat();
-    } else {
-      this.drawRunningCat();
+    if (stateData.nextState) {
+      this.#nextStateTimeout = setTimeout(
+        () => this.setState(stateData.nextState),
+        stateData.nextStateDelay * 1000
+      );
     }
 
-    this.ctx.restore();
+    if (stateData.imageInterval) {
+      this.#imageCycleInterval = setInterval(
+        () => this.renderImage(),
+        stateData.imageInterval*1000
+      );
+    }
+    this.renderImage();
   }
 
-  drawRunningCat() {
-    const bobOffset = Math.sin(this.frameCount * 0.1) * 2;
-
-    this.ctx.fillStyle = '#000';
-    this.ctx.beginPath();
-    this.ctx.ellipse(0, bobOffset, 12, 16, 0, 0, Math.PI * 2);
-    this.ctx.fill();
-
-    const tailAngle = this.frameCount * 0.05;
-    this.ctx.strokeStyle = '#000';
-    this.ctx.lineWidth = 3;
-    this.ctx.lineCap = 'round';
-    this.ctx.beginPath();
-    this.ctx.moveTo(-8, 8 + bobOffset);
-    this.ctx.quadraticCurveTo(
-      -14,
-      12 + bobOffset + Math.sin(tailAngle) * 4,
-      -16,
-      20 + bobOffset + Math.sin(tailAngle) * 6
-    );
-    this.ctx.stroke();
-
-    this.ctx.fillStyle = '#fff';
-    this.ctx.beginPath();
-    this.ctx.ellipse(-4, -5 + bobOffset, 2.5, 3, 0, 0, Math.PI * 2);
-    this.ctx.fill();
-    this.ctx.beginPath();
-    this.ctx.ellipse(4, -5 + bobOffset, 2.5, 3, 0, 0, Math.PI * 2);
-    this.ctx.fill();
-
-    this.ctx.fillStyle = '#000';
-    this.ctx.beginPath();
-    this.ctx.ellipse(-4, -4 + bobOffset, 1.2, 1.8, 0, 0, Math.PI * 2);
-    this.ctx.fill();
-    this.ctx.beginPath();
-    this.ctx.ellipse(4, -4 + bobOffset, 1.2, 1.8, 0, 0, Math.PI * 2);
-    this.ctx.fill();
-
-    const earOffset = Math.sin(this.frameCount * 0.08) * 1;
-    this.ctx.fillStyle = '#000';
-    this.ctx.beginPath();
-    this.ctx.ellipse(-6, -14 + bobOffset + earOffset, 2.5, 4, -Math.PI / 6, 0, Math.PI * 2);
-    this.ctx.fill();
-    this.ctx.beginPath();
-    this.ctx.ellipse(6, -14 + bobOffset + earOffset, 2.5, 4, Math.PI / 6, 0, Math.PI * 2);
-    this.ctx.fill();
-
-    this.ctx.fillStyle = '#ffb6c1';
-    this.ctx.beginPath();
-    this.ctx.ellipse(-6, -12 + bobOffset + earOffset, 1.2, 2, 0, 0, Math.PI * 2);
-    this.ctx.fill();
-    this.ctx.beginPath();
-    this.ctx.ellipse(6, -12 + bobOffset + earOffset, 1.2, 2, 0, 0, Math.PI * 2);
-    this.ctx.fill();
-
-    this.ctx.fillStyle = '#ff69b4';
-    this.ctx.beginPath();
-    this.ctx.arc(0, 4 + bobOffset, 1.5, 0, Math.PI * 2);
-    this.ctx.fill();
-  }
-
-  drawSleepingCat() {
-    this.ctx.fillStyle = '#000';
-    this.ctx.beginPath();
-    this.ctx.ellipse(0, 0, 12, 14, 0, 0, Math.PI * 2);
-    this.ctx.fill();
-
-    this.ctx.strokeStyle = '#000';
-    this.ctx.lineWidth = 3;
-    this.ctx.lineCap = 'round';
-    this.ctx.beginPath();
-    this.ctx.moveTo(-8, 6);
-    this.ctx.quadraticCurveTo(-14, 8, -16, 14);
-    this.ctx.stroke();
-
-    const sleepBobble = Math.sin(this.frameCount * 0.05) * 2;
-    this.ctx.fillStyle = '#d4d4d4';
-    this.ctx.beginPath();
-    this.ctx.arc(0, -18 + sleepBobble, 3, 0, Math.PI * 2);
-    this.ctx.fill();
-    this.ctx.beginPath();
-    this.ctx.arc(0, -22 + sleepBobble * 0.7, 2, 0, Math.PI * 2);
-    this.ctx.fill();
-    this.ctx.beginPath();
-    this.ctx.arc(0, -26 + sleepBobble * 0.5, 1.5, 0, Math.PI * 2);
-    this.ctx.fill();
-
-    this.ctx.fillStyle = '#000';
-    this.ctx.beginPath();
-    this.ctx.ellipse(-4, -7, 1.5, 2, 0, 0, Math.PI * 2);
-    this.ctx.fill();
-    this.ctx.beginPath();
-    this.ctx.ellipse(4, -7, 1.5, 2, 0, 0, Math.PI * 2);
-    this.ctx.fill();
-
-    this.ctx.fillStyle = '#ffb6c1';
-    this.ctx.beginPath();
-    this.ctx.arc(0, 6, 1.5, 0, Math.PI * 2);
-    this.ctx.fill();
-
-    this.ctx.fillStyle = '#000';
-    this.ctx.beginPath();
-    this.ctx.ellipse(-6, -10, 2, 3.5, -Math.PI / 6, 0, Math.PI * 2);
-    this.ctx.fill();
-    this.ctx.beginPath();
-    this.ctx.ellipse(6, -10, 2, 3.5, Math.PI / 6, 0, Math.PI * 2);
-    this.ctx.fill();
+  onClick() {
+    const stateData = this.stateMachine[this.#state];
+    if (stateData.click) {
+      this.setState(stateData.click);
+    }
   }
 }
 
