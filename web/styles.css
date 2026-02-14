@@ -841,3 +841,30 @@ input[type="file"] {
   border: 2px solid;
   border-color: var(--border-light) var(--border-darker) var(--border-darker) var(--border-light);
 }
+
+/* ---- Neko container ---- */
+.neko-container {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: calc(100vh - 180px);
+  min-height: 600px;
+  background: var(--window-bg);
+  overflow: hidden;
+}
+
+#neko-canvas {
+  flex: 1;
+  display: block;
+  cursor: crosshair;
+}
+
+.neko-info {
+  padding: 12px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  background: var(--platinum-light);
+  border-top: 2px solid var(--border-dark);
+  color: var(--text-secondary);
+  text-align: center;
+}

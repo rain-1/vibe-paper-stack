@@ -16,6 +16,7 @@
       <button id="tab-projects-btn" class="tab-btn" type="button" data-tab="projects">Projects</button>
       <button id="tab-search-btn" class="tab-btn" type="button" data-tab="search">Search</button>
       <button id="tab-data-btn" class="tab-btn" type="button" data-tab="data">Data</button>
+      <button id="tab-neko-btn" class="tab-btn" type="button" data-tab="neko">Neko</button>
     </nav>
 
     <section id="tab-tiles" class="tab-panel">
@@ -106,6 +107,13 @@
         </div>
         <div id="data-import-status" class="status-message hidden" role="status" aria-live="polite"></div>
       </section>
+    </section>
+
+    <section id="tab-neko" class="tab-panel hidden">
+      <div class="neko-container">
+        <canvas id="neko-canvas"></canvas>
+        <div class="neko-info">Move your mouse around to play with Neko. The cat will follow your cursor and take a nap when you stop!</div>
+      </div>
     </section>
 
     <template id="paper-template">

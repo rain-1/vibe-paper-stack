@@ -35,10 +35,12 @@ const tabTilesBtn = document.getElementById('tab-tiles-btn');
 const tabProjectsBtn = document.getElementById('tab-projects-btn');
 const tabSearchBtn = document.getElementById('tab-search-btn');
 const tabDataBtn = document.getElementById('tab-data-btn');
+const tabNekoBtn = document.getElementById('tab-neko-btn');
 const tabTiles = document.getElementById('tab-tiles');
 const tabProjects = document.getElementById('tab-projects');
 const tabSearch = document.getElementById('tab-search');
 const tabData = document.getElementById('tab-data');
+const tabNeko = document.getElementById('tab-neko');
 
 const ARXIV_FAVICON_URL = 'https://static.arxiv.org/static/base/0.17.8/images/icons/favicon.ico';
 const LESSWRONG_FAVICON_URL = 'https://www.lesswrong.com/favicon.ico';
@@ -80,21 +82,34 @@ function setStatus(target, message = '', type = '') {
   if (type) target.classList.add(type);
 }
 
+let nekogame = null;
+
 function switchTab(tabName) {
   state.activeTab = tabName;
   const showTiles = tabName === 'tiles';
   const showProjects = tabName === 'projects';
   const showSearch = tabName === 'search';
   const showData = tabName === 'data';
+  const showNeko = tabName === 'neko';
 
   tabTiles.classList.toggle('hidden', !showTiles);
   tabProjects.classList.toggle('hidden', !showProjects);
   tabSearch.classList.toggle('hidden', !showSearch);
   tabData.classList.toggle('hidden', !showData);
+  tabNeko.classList.toggle('hidden', !showNeko);
   tabTilesBtn.classList.toggle('active', showTiles);
   tabProjectsBtn.classList.toggle('active', showProjects);
   tabSearchBtn.classList.toggle('active', showSearch);
   tabDataBtn.classList.toggle('active', showData);
+  tabNekoBtn.classList.toggle('active', showNeko);
+
+  if (showNeko && !nekogame) {
+    nekogame = new Neko();
+    nekogame.start();
+  } else if (!showNeko && nekogame) {
+    nekogame.stop();
+    nekogame = null;
+  }
 }
 
 function buildQuery() {
@@ -720,6 +735,7 @@ tabTilesBtn.addEventListener('click', () => switchTab('tiles'));
 tabProjectsBtn.addEventListener('click', () => switchTab('projects'));
 tabSearchBtn.addEventListener('click', () => switchTab('search'));
 tabDataBtn.addEventListener('click', () => switchTab('data'));
+tabNekoBtn.addEventListener('click', () => switchTab('neko'));
 
 projectCreateForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -798,6 +814,221 @@ batchAddBtn.addEventListener('click', async () => {
 
 exportDataBtn.addEventListener('click', exportDataSnapshot);
 importDataBtn.addEventListener('click', importDataSnapshot);
+
+class Neko {
+  constructor() {
+    this.canvas = document.getElementById('neko-canvas');
+    this.ctx = this.canvas.getContext('2d');
+    this.canvas.width = window.innerWidth;
+    this.canvas.height = Math.max(600, window.innerHeight - 200);
+
+    this.catX = this.canvas.width / 2;
+    this.catY = this.canvas.height / 2;
+    this.mouseX = this.catX;
+    this.mouseY = this.catY;
+    this.targetX = this.catX;
+    this.targetY = this.catY;
+
+    this.speed = 3;
+    this.idleTimeout = null;
+    this.isIdle = false;
+    this.lastMoveTime = Date.now();
+    this.frameCount = 0;
+    this.animationId = null;
+    this.running = false;
+
+    this.setupEventListeners();
+  }
+
+  setupEventListeners() {
+    this.handleMouseMove = (e) => {
+      this.mouseX = e.clientX;
+      this.mouseY = e.clientY - (window.innerHeight - this.canvas.height) / 2;
+      this.targetX = this.mouseX;
+      this.targetY = this.mouseY;
+      this.lastMoveTime = Date.now();
+      if (this.isIdle) {
+        this.isIdle = false;
+      }
+      clearTimeout(this.idleTimeout);
+      this.idleTimeout = setTimeout(() => {
+        this.isIdle = true;
+      }, 3000);
+    };
+
+    this.handleWindowResize = () => {
+      this.canvas.width = window.innerWidth;
+      this.canvas.height = Math.max(600, window.innerHeight - 200);
+    };
+
+    document.addEventListener('mousemove', this.handleMouseMove);
+    window.addEventListener('resize', this.handleWindowResize);
+  }
+
+  start() {
+    this.running = true;
+    this.animate();
+  }
+
+  stop() {
+    this.running = false;
+    if (this.animationId) {
+      cancelAnimationFrame(this.animationId);
+    }
+    clearTimeout(this.idleTimeout);
+    document.removeEventListener('mousemove', this.handleMouseMove);
+    window.removeEventListener('resize', this.handleWindowResize);
+  }
+
+  animate() {
+    this.update();
+    this.draw();
+    if (this.running) {
+      this.animationId = requestAnimationFrame(() => this.animate());
+    }
+  }
+
+  update() {
+    this.frameCount++;
+
+    if (!this.isIdle) {
+      const dx = this.targetX - this.catX;
+      const dy = this.targetY - this.catY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      if (distance > 10) {
+        const angle = Math.atan2(dy, dx);
+        this.catX += Math.cos(angle) * this.speed;
+        this.catY += Math.sin(angle) * this.speed;
+      }
+    }
+  }
+
+  draw() {
+    this.ctx.fillStyle = '#d4d4d4';
+    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+    this.ctx.save();
+    this.ctx.translate(this.catX, this.catY);
+
+    if (this.isIdle) {
+      this.drawSleepingCat();
+    } else {
+      this.drawRunningCat();
+    }
+
+    this.ctx.restore();
+  }
+
+  drawRunningCat() {
+    const bobOffset = Math.sin(this.frameCount * 0.1) * 2;
+
+    this.ctx.fillStyle = '#000';
+    this.ctx.beginPath();
+    this.ctx.ellipse(0, bobOffset, 12, 16, 0, 0, Math.PI * 2);
+    this.ctx.fill();
+
+    const tailAngle = this.frameCount * 0.05;
+    this.ctx.strokeStyle = '#000';
+    this.ctx.lineWidth = 3;
+    this.ctx.lineCap = 'round';
+    this.ctx.beginPath();
+    this.ctx.moveTo(-8, 8 + bobOffset);
+    this.ctx.quadraticCurveTo(
+      -14,
+      12 + bobOffset + Math.sin(tailAngle) * 4,
+      -16,
+      20 + bobOffset + Math.sin(tailAngle) * 6
+    );
+    this.ctx.stroke();
+
+    this.ctx.fillStyle = '#fff';
+    this.ctx.beginPath();
+    this.ctx.ellipse(-4, -5 + bobOffset, 2.5, 3, 0, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.beginPath();
+    this.ctx.ellipse(4, -5 + bobOffset, 2.5, 3, 0, 0, Math.PI * 2);
+    this.ctx.fill();
+
+    this.ctx.fillStyle = '#000';
+    this.ctx.beginPath();
+    this.ctx.ellipse(-4, -4 + bobOffset, 1.2, 1.8, 0, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.beginPath();
+    this.ctx.ellipse(4, -4 + bobOffset, 1.2, 1.8, 0, 0, Math.PI * 2);
+    this.ctx.fill();
+
+    const earOffset = Math.sin(this.frameCount * 0.08) * 1;
+    this.ctx.fillStyle = '#000';
+    this.ctx.beginPath();
+    this.ctx.ellipse(-6, -14 + bobOffset + earOffset, 2.5, 4, -Math.PI / 6, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.beginPath();
+    this.ctx.ellipse(6, -14 + bobOffset + earOffset, 2.5, 4, Math.PI / 6, 0, Math.PI * 2);
+    this.ctx.fill();
+
+    this.ctx.fillStyle = '#ffb6c1';
+    this.ctx.beginPath();
+    this.ctx.ellipse(-6, -12 + bobOffset + earOffset, 1.2, 2, 0, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.beginPath();
+    this.ctx.ellipse(6, -12 + bobOffset + earOffset, 1.2, 2, 0, 0, Math.PI * 2);
+    this.ctx.fill();
+
+    this.ctx.fillStyle = '#ff69b4';
+    this.ctx.beginPath();
+    this.ctx.arc(0, 4 + bobOffset, 1.5, 0, Math.PI * 2);
+    this.ctx.fill();
+  }
+
+  drawSleepingCat() {
+    this.ctx.fillStyle = '#000';
+    this.ctx.beginPath();
+    this.ctx.ellipse(0, 0, 12, 14, 0, 0, Math.PI * 2);
+    this.ctx.fill();
+
+    this.ctx.strokeStyle = '#000';
+    this.ctx.lineWidth = 3;
+    this.ctx.lineCap = 'round';
+    this.ctx.beginPath();
+    this.ctx.moveTo(-8, 6);
+    this.ctx.quadraticCurveTo(-14, 8, -16, 14);
+    this.ctx.stroke();
+
+    const sleepBobble = Math.sin(this.frameCount * 0.05) * 2;
+    this.ctx.fillStyle = '#d4d4d4';
+    this.ctx.beginPath();
+    this.ctx.arc(0, -18 + sleepBobble, 3, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.beginPath();
+    this.ctx.arc(0, -22 + sleepBobble * 0.7, 2, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.beginPath();
+    this.ctx.arc(0, -26 + sleepBobble * 0.5, 1.5, 0, Math.PI * 2);
+    this.ctx.fill();
+
+    this.ctx.fillStyle = '#000';
+    this.ctx.beginPath();
+    this.ctx.ellipse(-4, -7, 1.5, 2, 0, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.beginPath();
+    this.ctx.ellipse(4, -7, 1.5, 2, 0, 0, Math.PI * 2);
+    this.ctx.fill();
+
+    this.ctx.fillStyle = '#ffb6c1';
+    this.ctx.beginPath();
+    this.ctx.arc(0, 6, 1.5, 0, Math.PI * 2);
+    this.ctx.fill();
+
+    this.ctx.fillStyle = '#000';
+    this.ctx.beginPath();
+    this.ctx.ellipse(-6, -10, 2, 3.5, -Math.PI / 6, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.beginPath();
+    this.ctx.ellipse(6, -10, 2, 3.5, Math.PI / 6, 0, Math.PI * 2);
+    this.ctx.fill();
+  }
+}
 
 try {
   switchTab('tiles');
