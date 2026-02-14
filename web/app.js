@@ -818,9 +818,10 @@ exportDataBtn.addEventListener('click', exportDataSnapshot);
 importDataBtn.addEventListener('click', importDataSnapshot);
 
 const nekoSize = 64;
-const nekoSpeed = 4;
-const nekoIdleDelay = 3000;
-const nekoCatchRadius = 24;
+const nekoSpeed = 3;
+const nekoCatchRadius = 32;
+const nekoGiveUpRadius = 400;
+const nekoIdleDelay = 5000;
 
 const allSpriteNames = [
   'awake', 'jare2', 'kaki1', 'kaki2', 'mati2', 'mati3', 'sleep1', 'sleep2',
@@ -861,6 +862,7 @@ class Neko {
     this.imgElem = new Image(nekoSize, nekoSize);
     this.imgElem.style.position = 'absolute';
     this.imgElem.style.imageRendering = 'pixelated';
+    this.imgElem.style.cursor = 'pointer';
     elem.appendChild(this.imgElem);
 
     const rect = elem.getBoundingClientRect();
@@ -872,53 +874,70 @@ class Neko {
     this.lastDy = 1;
 
     this.frame = 0;
-    this.state = 'idle';
+    this.state = 'sleep';
     this.idleTimer = null;
     this.sleepTimer = null;
     this.animId = null;
     this.running = false;
 
     this.updatePosition();
-    this.setSprite('mati2');
+    this.setSprite('sleep1');
 
     this.onMouseMove = (e) => {
       const r = this.elem.getBoundingClientRect();
       this.mouseX = e.clientX - r.left;
       this.mouseY = e.clientY - r.top;
-      if (this.state === 'sleep' || this.state === 'drowsy') {
+      if (this.state === 'chase') {
+        clearTimeout(this.idleTimer);
+        this.startIdleCountdown();
+      }
+    };
+
+    this.onClick = (e) => {
+      const r = this.elem.getBoundingClientRect();
+      this.mouseX = e.clientX - r.left;
+      this.mouseY = e.clientY - r.top;
+      if (this.state === 'sleep' || this.state === 'drowsy' || this.state === 'idle') {
         this.state = 'awake';
         this.setSprite('awake');
         clearTimeout(this.sleepTimer);
-        setTimeout(() => { if (this.state === 'awake') this.state = 'chase'; }, 500);
-      } else if (this.state === 'idle') {
-        this.state = 'chase';
+        clearTimeout(this.idleTimer);
+        setTimeout(() => {
+          if (this.state === 'awake') {
+            this.state = 'chase';
+            this.startIdleCountdown();
+          }
+        }, 500);
       }
-      clearTimeout(this.idleTimer);
-      this.idleTimer = setTimeout(() => {
-        if (this.state === 'chase' || this.state === 'idle') {
-          this.state = 'idle';
-          this.setSprite(directionStopSprite(this.lastDx, this.lastDy));
-          this.sleepTimer = setTimeout(() => {
-            if (this.state === 'idle') {
-              this.state = 'drowsy';
-              this.setSprite('kaki1');
-              setTimeout(() => {
-                if (this.state === 'drowsy') {
-                  this.setSprite('mati3');
-                  setTimeout(() => {
-                    if (this.state === 'drowsy') {
-                      this.state = 'sleep';
-                    }
-                  }, 1500);
-                }
-              }, 2000);
-            }
-          }, 3000);
-        }
-      }, nekoIdleDelay);
     };
 
     this.elem.addEventListener('mousemove', this.onMouseMove);
+    this.elem.addEventListener('click', this.onClick);
+  }
+
+  startIdleCountdown() {
+    this.idleTimer = setTimeout(() => {
+      if (this.state === 'chase') {
+        this.state = 'idle';
+        this.setSprite(directionStopSprite(this.lastDx, this.lastDy));
+        this.sleepTimer = setTimeout(() => {
+          if (this.state === 'idle') {
+            this.state = 'drowsy';
+            this.setSprite('kaki1');
+            setTimeout(() => {
+              if (this.state === 'drowsy') {
+                this.setSprite('mati3');
+                setTimeout(() => {
+                  if (this.state === 'drowsy') {
+                    this.state = 'sleep';
+                  }
+                }, 1500);
+              }
+            }, 2000);
+          }
+        }, 3000);
+      }
+    }, nekoIdleDelay);
   }
 
   setSprite(name) {
@@ -941,6 +960,7 @@ class Neko {
     clearTimeout(this.idleTimer);
     clearTimeout(this.sleepTimer);
     this.elem.removeEventListener('mousemove', this.onMouseMove);
+    this.elem.removeEventListener('click', this.onClick);
   }
 
   tick() {
@@ -952,7 +972,25 @@ class Neko {
       const dy = this.mouseY - this.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
 
-      if (dist > nekoCatchRadius) {
+      if (dist > nekoGiveUpRadius) {
+        this.state = 'idle';
+        this.setSprite(directionStopSprite(this.lastDx, this.lastDy));
+        clearTimeout(this.idleTimer);
+        this.sleepTimer = setTimeout(() => {
+          if (this.state === 'idle') {
+            this.state = 'drowsy';
+            this.setSprite('kaki1');
+            setTimeout(() => {
+              if (this.state === 'drowsy') {
+                this.setSprite('mati3');
+                setTimeout(() => {
+                  if (this.state === 'drowsy') this.state = 'sleep';
+                }, 1500);
+              }
+            }, 2000);
+          }
+        }, 3000);
+      } else if (dist > nekoCatchRadius) {
         const angle = Math.atan2(dy, dx);
         this.x += Math.cos(angle) * nekoSpeed;
         this.y += Math.sin(angle) * nekoSpeed;
@@ -961,10 +999,24 @@ class Neko {
         this.updatePosition();
 
         const pair = directionSprites(dx, dy);
-        this.setSprite(pair[Math.floor(this.frame / 4) % 2]);
+        this.setSprite(pair[Math.floor(this.frame / 5) % 2]);
       } else {
         this.state = 'idle';
         this.setSprite(directionStopSprite(this.lastDx, this.lastDy));
+        this.sleepTimer = setTimeout(() => {
+          if (this.state === 'idle') {
+            this.state = 'drowsy';
+            this.setSprite('kaki1');
+            setTimeout(() => {
+              if (this.state === 'drowsy') {
+                this.setSprite('mati3');
+                setTimeout(() => {
+                  if (this.state === 'drowsy') this.state = 'sleep';
+                }, 1500);
+              }
+            }, 2000);
+          }
+        }, 3000);
       }
     } else if (this.state === 'sleep') {
       this.setSprite(Math.floor(this.frame / 30) % 2 === 0 ? 'sleep1' : 'sleep2');
