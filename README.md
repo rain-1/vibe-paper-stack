@@ -2,6 +2,11 @@
 
 A lightweight local web app to track arXiv papers in a reading queue.
 
+## Screenshot
+
+<img width="1543" height="1699" alt="Screenshot 2026-02-14 170458" src="https://github.com/user-attachments/assets/53b430bf-8432-4d58-b488-e8adc6a04c13" />
+
+
 ## Features
 - Import a paper from an arXiv ID/URL, LessWrong URL, or direct PDF URL
 - For direct PDF URLs, attempts first-page title/abstract extraction with fallback metadata
